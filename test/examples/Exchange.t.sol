@@ -58,6 +58,13 @@ abstract contract ExchangeTest is Test {
         exchange.listMarket(2, 1, 1, 1);
     }
 
+    /// Relisting would change the margin rate under resting orders and reset trade stats.
+    function test_marketsCannotBeRelisted() public {
+        vm.expectRevert(abi.encodeWithSelector(Exchange.MarketExists.selector, ETH));
+        vm.prank(admin);
+        exchange.listMarket(ETH, 2_000, 2_000, 10);
+    }
+
     function test_depositAndWithdraw() public {
         (uint256 balance,,) = exchange.accountOf(maker);
         assertEq(balance, 1_000_000);

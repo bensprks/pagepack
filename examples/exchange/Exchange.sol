@@ -67,6 +67,7 @@ abstract contract Exchange {
     error NotAdmin();
     error NotOperator();
     error UnknownMarket(uint8 market);
+    error MarketExists(uint8 market);
     error InvalidSlot(uint8 slot);
     error InvalidFill();
     error InsufficientBalance(address account);
@@ -112,13 +113,18 @@ abstract contract Exchange {
     // Markets
     // ------------------------------------------------------------------------------------------
 
+    /// @notice Lists a market. A market's margin rate is fixed once listed: resting orders lock
+    ///         margin at that rate, and changing it would break releasing that margin later.
     function listMarket(uint8 market, uint64 markPrice, uint16 marginBps, uint16 takerFeeBps)
         external
         onlyAdmin
     {
         if (market >= MAX_MARKETS || markPrice == 0) revert UnknownMarket(market);
 
-        _locate(marketKey(market)).write(0, _packMarket(markPrice, marginBps, takerFeeBps, 0, 0));
+        Record record = _locate(marketKey(market));
+        if (record.read(0) != 0) revert MarketExists(market);
+
+        record.write(0, _packMarket(markPrice, marginBps, takerFeeBps, 0, 0));
     }
 
     /// @notice Stand-in for an oracle update.
