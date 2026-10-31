@@ -33,7 +33,7 @@ with pagepack; the benchmark baseline answers with a mapping. Both share every l
 **Reusable order slots.** Each account has 16 order slots. Instead of a new storage entry per
 order, a new order overwrites a slot, and cancelled or filled slots keep a nonzero word. Writing
 over a nonzero word avoids MIP-8's 17,000 gas charge for growing state, so placing an order in a
-reused slot costs 20% less, with or without pagepack.
+reused slot costs 19% less, with or without pagepack.
 
 **Hints.** Any call can carry `(key, hint)` pairs. They are stored in transient storage, so the
 caller can pass them in any order and each lookup costs one `TLOAD`. A market maker or a
@@ -67,15 +67,15 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 159,143 | 87,499 (-45%) | 77,059 (-52%) |
-| Re-quote 3 orders, one market | 107,677 | 88,327 (-18%) | 71,565 (-34%) |
+| Re-quote 1 order, maker in 6 markets | 159,567 | 87,923 (-45%) | 77,483 (-51%) |
+| Re-quote 3 orders, one market | 108,949 | 89,599 (-18%) | 72,837 (-33%) |
 | Taker vs 3 makers | 205,749 | 143,501 (-30%) | 134,477 (-35%) |
 | Taker vs 14 makers | 703,080 | 413,886 (-41%) | 367,000 (-48%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 86,834 |
-| New order in a reused slot | 69,834 (-20%) |
+| New order in a never-used slot | 87,258 |
+| New order in a reused slot | 70,258 (-19%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.

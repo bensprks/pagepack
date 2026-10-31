@@ -27,7 +27,7 @@ settles 1 to 30 accounts every few hundred milliseconds. Single-record writes an
 were never packed cost more than a mapping, because finding a record costs gas too.
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
-dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker filling against
+dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
 14 makers 48% less than the same exchange on mappings.
 
 ## How it works

@@ -80,7 +80,7 @@ every record by hash. It is not a property of the data:
 
 The explainer also names batched, multi-account forwarder flow as the regime its suite did not
 measure; in the sample, that was most of the traffic. The [example](README.md) models the account
-side of it: on the same transaction shapes, packing cuts the multi-market re-quote by 45% (52%
+side of it: on the same transaction shapes, packing cuts the multi-market re-quote by 45% (51%
 with hints) and the 14-maker fill by 41% (48% with hints).
 
 These are the model's savings, not Perpl's. Perpl's transactions touch several times more pages
