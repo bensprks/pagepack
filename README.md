@@ -122,6 +122,9 @@ make gas    # benchmarks and the comparison tables above
 make fmt
 ```
 
+CI checks gas snapshots. If a change moves any benchmark, run `make gas` and commit the updated
+`snapshots/` along with the change.
+
 ## License
 
 MIT

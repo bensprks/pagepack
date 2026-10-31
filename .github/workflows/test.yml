@@ -33,8 +33,10 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      # Fails if any vm.snapshotGas* result differs from snapshots/, so the checked-in gas
+      # numbers can't go stale.
       - name: Run Forge tests
-        run: forge test -vvv
+        run: forge test -vvv --gas-snapshot-check true
 
       - name: Build a downstream consumer
         run: ./scripts/check-consumer.sh
