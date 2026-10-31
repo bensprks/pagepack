@@ -138,6 +138,13 @@ abstract contract ExchangeTest is Test {
         _quote(maker, 16, ETH, true, 1, 1);
     }
 
+    /// A zero-price bid in market 0 would cancel to an all-zero word, so reusing the slot would
+    /// pay the state-growth charge that slot reuse exists to avoid.
+    function test_zeroPriceOrdersAreRejected() public {
+        vm.expectRevert(Exchange.InvalidPrice.selector);
+        _quote(maker, 0, ETH, false, 0, 5);
+    }
+
     // ------------------------------------------------------------------------------------------
     // Settlement
     // ------------------------------------------------------------------------------------------

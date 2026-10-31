@@ -72,6 +72,7 @@ abstract contract Exchange {
     error UnknownMarket(uint8 market);
     error MarketExists(uint8 market);
     error InvalidSlot(uint8 slot);
+    error InvalidPrice();
     error InvalidFill();
     error InsufficientBalance(address account);
     error InsufficientMargin(address account);
@@ -185,6 +186,10 @@ abstract contract Exchange {
         for (uint256 i; i < updates.length; ++i) {
             QuoteUpdate calldata u = updates[i];
             if (u.slot >= ORDER_SLOTS) revert InvalidSlot(u.slot);
+
+            // A live order needs a nonzero price: cancelling keeps only the price, market and side,
+            // so a zero-price bid in market 0 would empty its slot to zero and lose slot reuse.
+            if (u.size != 0 && u.price == 0) revert InvalidPrice();
 
             Record order = _locate(orderKey(msg.sender, u.slot));
             uint256 previous = order.read(0);
