@@ -29,6 +29,12 @@ TABLES = [
         ],
     },
     {
+        "title": "Library: rebalancing",
+        "label": "Operation",
+        "columns": [("pagepack", "pagepack-rebalance")],
+        "rows": ["Move a 3-word record within a page"],
+    },
+    {
         "title": "Exchange example",
         "label": "Operation",
         "columns": [
