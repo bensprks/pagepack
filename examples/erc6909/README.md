@@ -8,6 +8,8 @@ Because every token's balances live in one contract, pagepack can put records th
 together on the same page: a trader's balances of several tokens, a pool's reserves, and the
 approvals they spend.
 
+![A settlement batch loads 8 cold pages while records sit at their home pages. After the admin rebalances them onto one packed page, the same batch loads 2 pages, or 1 with hints.](rebalance.svg)
+
 | File | What it does |
 | --- | --- |
 | [`TokenLedger.sol`](TokenLedger.sol) | ERC-6909, token creation, batch settlement and facade entry points. Storage-agnostic. |

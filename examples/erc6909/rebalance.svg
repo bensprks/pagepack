@@ -1,0 +1,291 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-label="Animation: a settlement batch loads 8 cold storage pages when records sit at their home pages. After the admin rebalances them onto one packed page, the same batch loads 2 pages, or 1 with hints.">
+<title>Rebalancing the ERC-6909 ledger</title>
+<style>
+svg { --bg: #ffffff; --card: #f4f5f7; --tile: #fafbfc; --line: #d5d9e0; --text: #1b1f24;
+      --muted: #5f6b7a; --accent: #6e56cf; --accent-soft: rgba(110, 86, 207, 0.12);
+      --alice: #2f6fde; --bob: #d9822b; --carol: #1f9d6b; --other: #9aa4b2; --veil: rgba(255, 255, 255, 0.88); }
+@media (prefers-color-scheme: dark) {
+  svg { --bg: #0d1117; --card: #161b22; --tile: #11161d; --line: #30363d; --text: #e6edf3;
+        --muted: #8b949e; --accent: #a78bfa; --accent-soft: rgba(167, 139, 250, 0.16);
+        --alice: #5b8def; --bob: #e8984a; --carol: #3fbf8a; --other: #6e7681; --veil: rgba(13, 17, 23, 0.88); }
+}
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--text); font-size: 13px; }
+.title { font-size: 22px; font-weight: 650; }
+.caption { font-size: 15px; font-weight: 550; fill: var(--accent); }
+.heading { font-size: 13px; font-weight: 650; }
+.body { font-size: 14px; }
+.muted { fill: var(--muted); font-size: 12px; }
+.small { font-size: 11px; }
+.strong { font-weight: 650; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.big { font-size: 46px; font-weight: 700; fill: var(--accent); }
+.bg { fill: var(--bg); stroke: var(--line); }
+.card { fill: var(--card); }
+.tile { fill: var(--tile); stroke: var(--line); }
+.slot { fill: none; stroke: var(--line); stroke-dasharray: 3 3; }
+.idcell { fill: var(--card); stroke: var(--line); }
+.chip-text { fill: #ffffff; font-size: 12px; font-weight: 600; }
+.faded { opacity: 0.55; }
+.hl { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2.5; }
+.hl-bar { fill: var(--accent-soft); }
+.veil { fill: var(--veil); }
+.pill { fill: var(--accent); }
+.pill-text { fill: #ffffff; font-size: 13px; font-weight: 650; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+@keyframes cap1 { 0.000% { opacity: 0.0; } 0.995% { opacity: 0.0; } 2.250% { opacity: 1.0; } 29.500% { opacity: 1.0; } 30.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#cap1 { opacity: 0.0; animation: cap1 20.0s linear infinite; }
+@keyframes cap2 { 0.000% { opacity: 0.0; } 30.995% { opacity: 0.0; } 32.250% { opacity: 1.0; } 55.000% { opacity: 1.0; } 56.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#cap2 { opacity: 0.0; animation: cap2 20.0s linear infinite; }
+@keyframes cap3 { 0.000% { opacity: 0.0; } 56.495% { opacity: 0.0; } 57.750% { opacity: 1.0; } 95.000% { opacity: 1.0; } 96.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#cap3 { opacity: 0.0; animation: cap3 20.0s linear infinite; }
+@keyframes move0a { 0.000% { opacity: 0.0; } 5.995% { opacity: 0.0; } 6.600% { opacity: 1.0; } 12.300% { opacity: 1.0; } 12.900% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#move0a { opacity: 0.0; animation: move0a 20.0s linear infinite; }
+@keyframes move0b { 0.000% { opacity: 0.0; } 61.995% { opacity: 0.0; } 62.600% { opacity: 1.0; } 64.250% { opacity: 1.0; } 64.850% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#move0b { opacity: 0.0; animation: move0b 20.0s linear infinite; }
+@keyframes move1a { 0.000% { opacity: 0.0; } 12.295% { opacity: 0.0; } 12.900% { opacity: 1.0; } 18.600% { opacity: 1.0; } 19.200% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#move1a { opacity: 0.0; animation: move1a 20.0s linear infinite; }
+@keyframes move1b { 0.000% { opacity: 0.0; } 64.245% { opacity: 0.0; } 64.850% { opacity: 1.0; } 66.500% { opacity: 1.0; } 67.100% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#move1b { opacity: 0.0; animation: move1b 20.0s linear infinite; }
+@keyframes move2a { 0.000% { opacity: 0.0; } 18.595% { opacity: 0.0; } 19.200% { opacity: 1.0; } 24.900% { opacity: 1.0; } 25.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#move2a { opacity: 0.0; animation: move2a 20.0s linear infinite; }
+@keyframes move2b { 0.000% { opacity: 0.0; } 66.495% { opacity: 0.0; } 67.100% { opacity: 1.0; } 68.750% { opacity: 1.0; } 69.350% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#move2b { opacity: 0.0; animation: move2b 20.0s linear infinite; }
+@keyframes n1_0 { 0.000% { opacity: 0.0; } 5.995% { opacity: 0.0; } 6.400% { opacity: 1.0; } 7.850% { opacity: 1.0; } 8.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_0 { opacity: 0.0; animation: n1_0 20.0s linear infinite; }
+@keyframes n1_1 { 0.000% { opacity: 0.0; } 8.095% { opacity: 0.0; } 8.500% { opacity: 1.0; } 9.950% { opacity: 1.0; } 10.350% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_1 { opacity: 0.0; animation: n1_1 20.0s linear infinite; }
+@keyframes n1_2 { 0.000% { opacity: 0.0; } 10.195% { opacity: 0.0; } 10.600% { opacity: 1.0; } 12.050% { opacity: 1.0; } 12.450% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_2 { opacity: 0.0; animation: n1_2 20.0s linear infinite; }
+@keyframes n1_3 { 0.000% { opacity: 0.0; } 12.295% { opacity: 0.0; } 12.700% { opacity: 1.0; } 14.150% { opacity: 1.0; } 14.550% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_3 { opacity: 0.0; animation: n1_3 20.0s linear infinite; }
+@keyframes n1_4 { 0.000% { opacity: 0.0; } 14.395% { opacity: 0.0; } 14.800% { opacity: 1.0; } 16.250% { opacity: 1.0; } 16.650% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_4 { opacity: 0.0; animation: n1_4 20.0s linear infinite; }
+@keyframes n1_5 { 0.000% { opacity: 0.0; } 16.495% { opacity: 0.0; } 16.900% { opacity: 1.0; } 18.350% { opacity: 1.0; } 18.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_5 { opacity: 0.0; animation: n1_5 20.0s linear infinite; }
+@keyframes n1_6 { 0.000% { opacity: 0.0; } 18.595% { opacity: 0.0; } 19.000% { opacity: 1.0; } 20.450% { opacity: 1.0; } 20.850% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_6 { opacity: 0.0; animation: n1_6 20.0s linear infinite; }
+@keyframes n1_7 { 0.000% { opacity: 0.0; } 20.695% { opacity: 0.0; } 21.100% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.400% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n1_7 { opacity: 0.0; animation: n1_7 20.0s linear infinite; }
+@keyframes n3_1 { 0.000% { opacity: 0.0; } 57.995% { opacity: 0.0; } 58.400% { opacity: 1.0; } 60.750% { opacity: 1.0; } 61.150% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n3_1 { opacity: 0.0; animation: n3_1 20.0s linear infinite; }
+@keyframes n3_2 { 0.000% { opacity: 0.0; } 60.995% { opacity: 0.0; } 61.400% { opacity: 1.0; } 77.750% { opacity: 1.0; } 78.150% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n3_2 { opacity: 0.0; animation: n3_2 20.0s linear infinite; }
+@keyframes n3_h { 0.000% { opacity: 0.0; } 77.995% { opacity: 0.0; } 78.400% { opacity: 1.0; } 95.000% { opacity: 1.0; } 95.400% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#n3_h { opacity: 0.0; animation: n3_h 20.0s linear infinite; }
+@keyframes g1 { 0.000% { opacity: 0.0; } 21.695% { opacity: 0.0; } 22.700% { opacity: 1.0; } 29.000% { opacity: 1.0; } 30.000% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#g1 { opacity: 0.0; animation: g1 20.0s linear infinite; }
+@keyframes g3 { 0.000% { opacity: 0.0; } 68.995% { opacity: 0.0; } 70.000% { opacity: 1.0; } 77.750% { opacity: 1.0; } 78.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#g3 { opacity: 0.0; animation: g3 20.0s linear infinite; }
+@keyframes g3h { 0.000% { opacity: 0.0; } 77.995% { opacity: 0.0; } 79.000% { opacity: 1.0; } 95.000% { opacity: 1.0; } 96.000% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#g3h { opacity: 0.0; animation: g3h 20.0s linear infinite; }
+@keyframes hl_home1 { 0.000% { opacity: 0.0; } 5.995% { opacity: 0.0; } 6.750% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home1 { opacity: 0.0; animation: hl_home1 20.0s linear infinite; }
+@keyframes hl_home0 { 0.000% { opacity: 0.0; } 8.095% { opacity: 0.0; } 8.850% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home0 { opacity: 0.0; animation: hl_home0 20.0s linear infinite; }
+@keyframes hl_home2 { 0.000% { opacity: 0.0; } 10.195% { opacity: 0.0; } 10.950% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home2 { opacity: 0.0; animation: hl_home2 20.0s linear infinite; }
+@keyframes hl_home4 { 0.000% { opacity: 0.0; } 12.295% { opacity: 0.0; } 13.050% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home4 { opacity: 0.0; animation: hl_home4 20.0s linear infinite; }
+@keyframes hl_home3 { 0.000% { opacity: 0.0; } 14.395% { opacity: 0.0; } 15.150% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home3 { opacity: 0.0; animation: hl_home3 20.0s linear infinite; }
+@keyframes hl_home6 { 0.000% { opacity: 0.0; } 16.495% { opacity: 0.0; } 17.250% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home6 { opacity: 0.0; animation: hl_home6 20.0s linear infinite; }
+@keyframes hl_home7 { 0.000% { opacity: 0.0; } 18.595% { opacity: 0.0; } 19.350% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home7 { opacity: 0.0; animation: hl_home7 20.0s linear infinite; }
+@keyframes hl_home5 { 0.000% { opacity: 0.0; } 20.695% { opacity: 0.0; } 21.450% { opacity: 1.0; } 29.000% { opacity: 1.0; } 29.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_home5 { opacity: 0.0; animation: hl_home5 20.0s linear infinite; }
+@keyframes empty0 { 0.000% { opacity: 0.0; } 34.995% { opacity: 0.0; } 36.500% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty0 { opacity: 0.0; animation: empty0 20.0s linear infinite; }
+@keyframes empty1 { 0.000% { opacity: 0.0; } 37.195% { opacity: 0.0; } 38.700% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty1 { opacity: 0.0; animation: empty1 20.0s linear infinite; }
+@keyframes empty2 { 0.000% { opacity: 0.0; } 39.395% { opacity: 0.0; } 40.900% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty2 { opacity: 0.0; animation: empty2 20.0s linear infinite; }
+@keyframes empty3 { 0.000% { opacity: 0.0; } 41.595% { opacity: 0.0; } 43.100% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty3 { opacity: 0.0; animation: empty3 20.0s linear infinite; }
+@keyframes empty4 { 0.000% { opacity: 0.0; } 43.795% { opacity: 0.0; } 45.300% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty4 { opacity: 0.0; animation: empty4 20.0s linear infinite; }
+@keyframes empty5 { 0.000% { opacity: 0.0; } 45.995% { opacity: 0.0; } 47.500% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty5 { opacity: 0.0; animation: empty5 20.0s linear infinite; }
+@keyframes empty6 { 0.000% { opacity: 0.0; } 48.195% { opacity: 0.0; } 49.700% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty6 { opacity: 0.0; animation: empty6 20.0s linear infinite; }
+@keyframes empty7 { 0.000% { opacity: 0.0; } 50.395% { opacity: 0.0; } 51.900% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.500% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#empty7 { opacity: 0.0; animation: empty7 20.0s linear infinite; }
+@keyframes dir0 { 0.000% { opacity: 0.0; } 35.995% { opacity: 0.0; } 37.250% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir0 { opacity: 0.0; animation: dir0 20.0s linear infinite; }
+@keyframes dir1 { 0.000% { opacity: 0.0; } 38.195% { opacity: 0.0; } 39.450% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir1 { opacity: 0.0; animation: dir1 20.0s linear infinite; }
+@keyframes dir2 { 0.000% { opacity: 0.0; } 40.395% { opacity: 0.0; } 41.650% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir2 { opacity: 0.0; animation: dir2 20.0s linear infinite; }
+@keyframes dir3 { 0.000% { opacity: 0.0; } 42.595% { opacity: 0.0; } 43.850% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir3 { opacity: 0.0; animation: dir3 20.0s linear infinite; }
+@keyframes dir4 { 0.000% { opacity: 0.0; } 44.795% { opacity: 0.0; } 46.050% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir4 { opacity: 0.0; animation: dir4 20.0s linear infinite; }
+@keyframes dir5 { 0.000% { opacity: 0.0; } 46.995% { opacity: 0.0; } 48.250% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir5 { opacity: 0.0; animation: dir5 20.0s linear infinite; }
+@keyframes dir6 { 0.000% { opacity: 0.0; } 49.195% { opacity: 0.0; } 50.450% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir6 { opacity: 0.0; animation: dir6 20.0s linear infinite; }
+@keyframes dir7 { 0.000% { opacity: 0.0; } 51.395% { opacity: 0.0; } 52.650% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#dir7 { opacity: 0.0; animation: dir7 20.0s linear infinite; }
+@keyframes id0 { 0.000% { opacity: 0.0; } 35.995% { opacity: 0.0; } 37.250% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id0 { opacity: 0.0; animation: id0 20.0s linear infinite; }
+@keyframes id1 { 0.000% { opacity: 0.0; } 38.195% { opacity: 0.0; } 39.450% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id1 { opacity: 0.0; animation: id1 20.0s linear infinite; }
+@keyframes id2 { 0.000% { opacity: 0.0; } 40.395% { opacity: 0.0; } 41.650% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id2 { opacity: 0.0; animation: id2 20.0s linear infinite; }
+@keyframes id3 { 0.000% { opacity: 0.0; } 42.595% { opacity: 0.0; } 43.850% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id3 { opacity: 0.0; animation: id3 20.0s linear infinite; }
+@keyframes id4 { 0.000% { opacity: 0.0; } 44.795% { opacity: 0.0; } 46.050% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id4 { opacity: 0.0; animation: id4 20.0s linear infinite; }
+@keyframes id5 { 0.000% { opacity: 0.0; } 46.995% { opacity: 0.0; } 48.250% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id5 { opacity: 0.0; animation: id5 20.0s linear infinite; }
+@keyframes id6 { 0.000% { opacity: 0.0; } 49.195% { opacity: 0.0; } 50.450% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id6 { opacity: 0.0; animation: id6 20.0s linear infinite; }
+@keyframes id7 { 0.000% { opacity: 0.0; } 51.395% { opacity: 0.0; } 52.650% { opacity: 1.0; } 97.000% { opacity: 1.0; } 98.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#id7 { opacity: 0.0; animation: id7 20.0s linear infinite; }
+@keyframes hl_dir { 0.000% { opacity: 0.0; } 57.995% { opacity: 0.0; } 58.750% { opacity: 1.0; } 77.500% { opacity: 1.0; } 78.250% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_dir { opacity: 0.0; animation: hl_dir 20.0s linear infinite; }
+@keyframes hl_pack { 0.000% { opacity: 0.0; } 60.995% { opacity: 0.0; } 61.750% { opacity: 1.0; } 95.000% { opacity: 1.0; } 95.750% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#hl_pack { opacity: 0.0; animation: hl_pack 20.0s linear infinite; }
+@keyframes skip_dir { 0.000% { opacity: 0.0; } 77.995% { opacity: 0.0; } 79.000% { opacity: 1.0; } 95.000% { opacity: 1.0; } 96.000% { opacity: 0.0; } 100.000% { opacity: 0.0; } }
+#skip_dir { opacity: 0.0; animation: skip_dir 20.0s linear infinite; }
+@keyframes rec0 { 0.000% { transform: translate(0px, 0px); } 32.500% { transform: translate(0px, 0px); } 37.000% { transform: translate(117px, 165px); } 100.000% { transform: translate(117px, 165px); } }
+#rec0 { animation: rec0 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec1 { 0.000% { transform: translate(0px, 0px); } 34.700% { transform: translate(0px, 0px); } 39.200% { transform: translate(273px, 259px); } 100.000% { transform: translate(273px, 259px); } }
+#rec1 { animation: rec1 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec2 { 0.000% { transform: translate(0px, 0px); } 36.900% { transform: translate(0px, 0px); } 41.400% { transform: translate(-39px, 179px); } 100.000% { transform: translate(-39px, 179px); } }
+#rec2 { animation: rec2 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec3 { 0.000% { transform: translate(0px, 0px); } 39.100% { transform: translate(0px, 0px); } 43.600% { transform: translate(-195px, 331px); } 100.000% { transform: translate(-195px, 331px); } }
+#rec3 { animation: rec3 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec4 { 0.000% { transform: translate(0px, 0px); } 41.300% { transform: translate(0px, 0px); } 45.800% { transform: translate(483px, 107px); } 100.000% { transform: translate(483px, 107px); } }
+#rec4 { animation: rec4 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec5 { 0.000% { transform: translate(0px, 0px); } 43.500% { transform: translate(0px, 0px); } 48.000% { transform: translate(15px, 143px); } 100.000% { transform: translate(15px, 143px); } }
+#rec5 { animation: rec5 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec6 { 0.000% { transform: translate(0px, 0px); } 45.700% { transform: translate(0px, 0px); } 50.200% { transform: translate(171px, 237px); } 100.000% { transform: translate(171px, 237px); } }
+#rec6 { animation: rec6 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes rec7 { 0.000% { transform: translate(0px, 0px); } 47.900% { transform: translate(0px, 0px); } 52.400% { transform: translate(327px, 331px); } 100.000% { transform: translate(327px, 331px); } }
+#rec7 { animation: rec7 20.0s infinite; animation-timing-function: ease-in-out; }
+@keyframes scene { 0% { opacity: 0; } 2.5% { opacity: 1; } 96% { opacity: 1; } 100% { opacity: 0; } }
+#scene { animation: scene 20.0s linear infinite; }
+</style>
+<g id="scene">
+<rect width="960" height="540" rx="16" class="bg" />
+<text x="32" y="46" class="title">Rebalancing the ERC-6909 ledger</text>
+<g id="cap1"><text x="32" y="76" class="caption">1 · Before: every record sits on its own home page, like a mapping entry</text></g>
+<g id="cap2"><text x="32" y="76" class="caption">2 · The admin calls rebalance(): records move onto one packed page</text></g>
+<g id="cap3"><text x="32" y="76" class="caption">3 · After: the same batch loads 2 pages, or 1 with hints</text></g>
+<rect x="32" y="100" width="246" height="140" rx="10" class="card" />
+<text x="48" y="126" class="heading">Settlement batch</text>
+<text x="48" y="144" class="muted">sent by an operator</text>
+<rect id="move0a" x="40" y="154" width="230" height="22" rx="5" class="hl-bar" />
+<rect id="move0b" x="40" y="154" width="230" height="22" rx="5" class="hl-bar" />
+<text x="48" y="170" class="body"><tspan style="fill: var(--alice)">Alice</tspan> → <tspan style="fill: var(--bob)">Bob</tspan></text>
+<text x="262" y="170" class="body mono" text-anchor="end">5 A</text>
+<rect id="move1a" x="40" y="178" width="230" height="22" rx="5" class="hl-bar" />
+<rect id="move1b" x="40" y="178" width="230" height="22" rx="5" class="hl-bar" />
+<text x="48" y="194" class="body"><tspan style="fill: var(--bob)">Bob</tspan> → <tspan style="fill: var(--carol)">Carol</tspan></text>
+<text x="262" y="194" class="body mono" text-anchor="end">2 B</text>
+<rect id="move2a" x="40" y="202" width="230" height="22" rx="5" class="hl-bar" />
+<rect id="move2b" x="40" y="202" width="230" height="22" rx="5" class="hl-bar" />
+<text x="48" y="218" class="body"><tspan style="fill: var(--carol)">Carol</tspan> → <tspan style="fill: var(--alice)">Alice</tspan></text>
+<text x="262" y="218" class="body mono" text-anchor="end">1 A</text>
+<rect x="32" y="256" width="246" height="128" rx="10" class="card" />
+<text x="48" y="282" class="heading">Cold pages loaded</text>
+<g id="n1_0"><text x="48" y="338" class="big">1</text></g>
+<g id="n1_1"><text x="48" y="338" class="big">2</text></g>
+<g id="n1_2"><text x="48" y="338" class="big">3</text></g>
+<g id="n1_3"><text x="48" y="338" class="big">4</text></g>
+<g id="n1_4"><text x="48" y="338" class="big">5</text></g>
+<g id="n1_5"><text x="48" y="338" class="big">6</text></g>
+<g id="n1_6"><text x="48" y="338" class="big">7</text></g>
+<g id="n1_7"><text x="48" y="338" class="big">8</text></g>
+<g id="n3_1"><text x="48" y="338" class="big">1</text></g>
+<g id="n3_2"><text x="48" y="338" class="big">2</text></g>
+<g id="n3_h"><text x="48" y="338" class="big">1</text></g>
+<g id="g1"><text x="48" y="366" class="body">8 × 8,100 = 64,800 gas</text></g>
+<g id="g3"><text x="48" y="366" class="body">2 × 8,100 = 16,200 gas</text></g>
+<g id="g3h"><text x="48" y="366" class="body">with hints: 8,100 gas</text></g>
+<text x="32" y="410" class="heading">Records</text>
+<text x="32" y="436" class="body mono strong">A / B</text>
+<text x="80" y="436" class="muted">balance of token A or B</text>
+<text x="32" y="458" class="body mono strong">op</text>
+<text x="80" y="458" class="muted">operator approval for the settler</text>
+<text x="32" y="480" class="body mono strong">id</text>
+<text x="80" y="480" class="muted">identity word, keccak256(space, key)</text>
+<text x="32" y="518" class="muted small">Each record is one storage word and a page is 128 words. Gas figures count page loads only.</text>
+<text x="302" y="106" class="heading">Home pages</text>
+<text x="394" y="106" class="muted">keccak256(space, key), one record each</text>
+<rect x="302" y="118" width="146" height="48" rx="8" class="tile" />
+<rect x="458" y="118" width="146" height="48" rx="8" class="tile" />
+<rect x="614" y="118" width="146" height="48" rx="8" class="tile" />
+<rect x="631" y="130" width="112" height="24" rx="6" class="chip faded" style="fill: var(--other)" /><text x="687.0" y="146.5" class="chip-text" text-anchor="middle">Dave · A</text>
+<rect x="770" y="118" width="146" height="48" rx="8" class="tile" />
+<rect x="302" y="176" width="146" height="48" rx="8" class="tile" />
+<rect x="319" y="188" width="112" height="24" rx="6" class="chip faded" style="fill: var(--other)" /><text x="375.0" y="204.5" class="chip-text" text-anchor="middle">Pool · B</text>
+<rect x="458" y="176" width="146" height="48" rx="8" class="tile" />
+<rect x="614" y="176" width="146" height="48" rx="8" class="tile" />
+<rect x="770" y="176" width="146" height="48" rx="8" class="tile" />
+<rect x="787" y="188" width="112" height="24" rx="6" class="chip faded" style="fill: var(--other)" /><text x="843.0" y="204.5" class="chip-text" text-anchor="middle">Erin · op</text>
+<rect x="302" y="234" width="146" height="48" rx="8" class="tile" />
+<rect x="458" y="234" width="146" height="48" rx="8" class="tile" />
+<rect x="475" y="246" width="112" height="24" rx="6" class="chip faded" style="fill: var(--other)" /><text x="531.0" y="262.5" class="chip-text" text-anchor="middle">Pool · A</text>
+<rect x="614" y="234" width="146" height="48" rx="8" class="tile" />
+<rect x="770" y="234" width="146" height="48" rx="8" class="tile" />
+<rect id="hl_home1" x="302" y="118" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home0" x="458" y="176" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home2" x="614" y="234" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home4" x="302" y="234" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home3" x="770" y="118" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home6" x="614" y="176" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home7" x="458" y="118" width="146" height="48" rx="8" class="hl" />
+<rect id="hl_home5" x="770" y="234" width="146" height="48" rx="8" class="hl" />
+<g id="empty0"><text x="531.0" y="205" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty1"><text x="375.0" y="147" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty2"><text x="687.0" y="263" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty3"><text x="843.0" y="147" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty4"><text x="375.0" y="263" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty5"><text x="843.0" y="263" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty6"><text x="687.0" y="205" class="muted" text-anchor="middle">moved</text></g>
+<g id="empty7"><text x="531.0" y="147" class="muted" text-anchor="middle">moved</text></g>
+<rect x="302" y="314" width="176" height="176" rx="10" class="tile" />
+<text x="316" y="336" class="heading">Directory page</text>
+<g id="dir0"><text x="316" y="358" class="mono small">fp 0a71</text><text x="464" y="358" class="mono small muted" text-anchor="end">→ slot 0</text></g>
+<g id="dir1"><text x="316" y="374" class="mono small">fp 1f3c</text><text x="464" y="374" class="mono small muted" text-anchor="end">→ slot 1</text></g>
+<g id="dir2"><text x="316" y="390" class="mono small">fp 2b90</text><text x="464" y="390" class="mono small muted" text-anchor="end">→ slot 2</text></g>
+<g id="dir3"><text x="316" y="406" class="mono small">fp 4e05</text><text x="464" y="406" class="mono small muted" text-anchor="end">→ slot 3</text></g>
+<g id="dir4"><text x="316" y="422" class="mono small">fp 6d2a</text><text x="464" y="422" class="mono small muted" text-anchor="end">→ slot 4</text></g>
+<g id="dir5"><text x="316" y="438" class="mono small">fp 8c47</text><text x="464" y="438" class="mono small muted" text-anchor="end">→ slot 5</text></g>
+<g id="dir6"><text x="316" y="454" class="mono small">fp b3e1</text><text x="464" y="454" class="mono small muted" text-anchor="end">→ slot 6</text></g>
+<g id="dir7"><text x="316" y="470" class="mono small">fp e968</text><text x="464" y="470" class="mono small muted" text-anchor="end">→ slot 7</text></g>
+<rect x="494" y="314" width="434" height="176" rx="10" class="tile" />
+<text x="508" y="336" class="heading">Packed page 0</text>
+<text x="622" y="336" class="muted">up to 64 one-word records</text>
+<rect x="506" y="348" width="206" height="34" rx="6" class="slot" />
+<g id="id0"><rect x="512" y="353" width="70" height="24" rx="5" class="idcell" /><text x="547" y="369" class="mono small" text-anchor="middle">id</text></g>
+<rect x="506" y="384" width="206" height="34" rx="6" class="slot" />
+<g id="id1"><rect x="512" y="389" width="70" height="24" rx="5" class="idcell" /><text x="547" y="405" class="mono small" text-anchor="middle">id</text></g>
+<rect x="506" y="420" width="206" height="34" rx="6" class="slot" />
+<g id="id2"><rect x="512" y="425" width="70" height="24" rx="5" class="idcell" /><text x="547" y="441" class="mono small" text-anchor="middle">id</text></g>
+<rect x="506" y="456" width="206" height="34" rx="6" class="slot" />
+<g id="id3"><rect x="512" y="461" width="70" height="24" rx="5" class="idcell" /><text x="547" y="477" class="mono small" text-anchor="middle">id</text></g>
+<rect x="716" y="348" width="206" height="34" rx="6" class="slot" />
+<g id="id4"><rect x="722" y="353" width="70" height="24" rx="5" class="idcell" /><text x="757" y="369" class="mono small" text-anchor="middle">id</text></g>
+<rect x="716" y="384" width="206" height="34" rx="6" class="slot" />
+<g id="id5"><rect x="722" y="389" width="70" height="24" rx="5" class="idcell" /><text x="757" y="405" class="mono small" text-anchor="middle">id</text></g>
+<rect x="716" y="420" width="206" height="34" rx="6" class="slot" />
+<g id="id6"><rect x="722" y="425" width="70" height="24" rx="5" class="idcell" /><text x="757" y="441" class="mono small" text-anchor="middle">id</text></g>
+<rect x="716" y="456" width="206" height="34" rx="6" class="slot" />
+<g id="id7"><rect x="722" y="461" width="70" height="24" rx="5" class="idcell" /><text x="757" y="477" class="mono small" text-anchor="middle">id</text></g>
+<rect id="hl_dir" x="302" y="314" width="176" height="176" rx="10" class="hl" />
+<rect id="hl_pack" x="494" y="314" width="434" height="176" rx="10" class="hl" />
+<g id="skip_dir"><rect x="302" y="314" width="176" height="176" rx="10" class="veil" /><rect x="330" y="386.0" width="120" height="30" rx="15" class="pill" /><text x="390.0" y="406.0" class="pill-text" text-anchor="middle">skipped: hint</text></g>
+<g id="rec0"><rect x="475" y="188" width="112" height="24" rx="6" class="chip" style="fill: var(--alice)" /><text x="531.0" y="204.5" class="chip-text" text-anchor="middle">Alice · A</text></g>
+<g id="rec1"><rect x="319" y="130" width="112" height="24" rx="6" class="chip" style="fill: var(--alice)" /><text x="375.0" y="146.5" class="chip-text" text-anchor="middle">Alice · op</text></g>
+<g id="rec2"><rect x="631" y="246" width="112" height="24" rx="6" class="chip" style="fill: var(--bob)" /><text x="687.0" y="262.5" class="chip-text" text-anchor="middle">Bob · A</text></g>
+<g id="rec3"><rect x="787" y="130" width="112" height="24" rx="6" class="chip" style="fill: var(--bob)" /><text x="843.0" y="146.5" class="chip-text" text-anchor="middle">Bob · B</text></g>
+<g id="rec4"><rect x="319" y="246" width="112" height="24" rx="6" class="chip" style="fill: var(--bob)" /><text x="375.0" y="262.5" class="chip-text" text-anchor="middle">Bob · op</text></g>
+<g id="rec5"><rect x="787" y="246" width="112" height="24" rx="6" class="chip" style="fill: var(--carol)" /><text x="843.0" y="262.5" class="chip-text" text-anchor="middle">Carol · A</text></g>
+<g id="rec6"><rect x="631" y="188" width="112" height="24" rx="6" class="chip" style="fill: var(--carol)" /><text x="687.0" y="204.5" class="chip-text" text-anchor="middle">Carol · B</text></g>
+<g id="rec7"><rect x="475" y="130" width="112" height="24" rx="6" class="chip" style="fill: var(--carol)" /><text x="531.0" y="146.5" class="chip-text" text-anchor="middle">Carol · op</text></g>
+</g>
+</svg>

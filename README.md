@@ -28,7 +28,7 @@ were never packed cost more than a mapping, because finding a record costs gas t
 
 In the [ERC-6909 example](examples/erc6909), a 30-move batch settlement costs 73% less than the
 same ledger on mappings, and a pool swap through ERC-20 facades costs 5% less than with standalone
-ERC-20 tokens.
+ERC-20 tokens. Its README has an animated walkthrough of a rebalance.
 
 ## How it works
 
