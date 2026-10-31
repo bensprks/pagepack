@@ -167,6 +167,25 @@ abstract contract ExchangeTest is Test {
         assertEq(remaining, 30);
     }
 
+    /// 10 lots at 2,001 with 10% margin lock 2,001. Releasing each one-lot fill's own rounded
+    /// share would free only 200 × 10 and strand 1 forever.
+    function test_partialFillsReleaseTheWholeReservation() public {
+        _quote(maker, 0, ETH, true, 2_001, 10);
+
+        (, uint256 locked,) = exchange.accountOf(maker);
+        assertEq(locked, 2_001);
+
+        for (uint256 i; i < 10; ++i) {
+            _settle(taker, _fill(maker, 0, 1));
+        }
+
+        (, uint256 remaining,,) = exchange.orderOf(maker, 0);
+        (, locked,) = exchange.accountOf(maker);
+
+        assertEq(remaining, 0);
+        assertEq(locked, 0);
+    }
+
     function test_closingAPositionRealizesProfit() public {
         address other = makeAddr("other");
         _fund(other, 1_000_000);

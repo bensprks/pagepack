@@ -332,31 +332,43 @@ abstract contract Exchange {
     {
         if (f.maker == taker || f.size == 0) revert InvalidFill();
 
-        (uint8 market, uint256 price, bool makerSold) = _takeFromOrder(f);
-        (uint256 marginBps, uint256 feeBps) = _recordTrade(market, price, f.size);
-
-        int256 makerDelta = makerSold ? -int256(uint256(f.size)) : int256(uint256(f.size));
-        uint256 notional = uint256(f.size) * price;
-
-        // The filled part of the order no longer needs its locked margin.
-        _settleMaker(f.maker, market, makerDelta, price, notional * marginBps / BPS);
+        (uint8 market, uint256 price, int256 makerDelta, uint256 feeBps) = _fillMaker(f);
 
         (realized, takerMarkets) = _applyToPosition(taker, market, -makerDelta, price, takerMarkets);
-        fee = notional * feeBps / BPS;
+        fee = uint256(f.size) * price * feeBps / BPS;
 
         emit Filled(market, f.maker, taker, f.size, price.toUint64());
         return (realized, fee, takerMarkets);
     }
 
-    /// Takes the fill out of the maker's order slot.
+    /// Settles the maker's side of a fill: the order slot, the market's trade stats, the
+    /// maker's position and the release of the filled part's locked margin. Returns what the
+    /// taker's side needs.
+    function _fillMaker(Fill calldata f)
+        private
+        returns (uint8 market, uint256 price, int256 makerDelta, uint256 feeBps)
+    {
+        bool makerSold;
+        uint256 remaining;
+        (market, price, makerSold, remaining) = _takeFromOrder(f);
+
+        uint256 marginBps;
+        (marginBps, feeBps) = _recordTrade(market, price, f.size);
+
+        makerDelta = makerSold ? -int256(uint256(f.size)) : int256(uint256(f.size));
+        _settleMaker(
+            f.maker, market, makerDelta, price, _released(remaining, f.size, price, marginBps)
+        );
+    }
+
+    /// Takes the fill out of the maker's order slot. Returns the order's size before the fill.
     function _takeFromOrder(Fill calldata f)
         private
-        returns (uint8 market, uint256 price, bool makerSold)
+        returns (uint8 market, uint256 price, bool makerSold, uint256 size)
     {
         Record order = _locate(orderKey(f.maker, f.slot));
         uint256 word = order.read(0);
 
-        uint256 size;
         (price, size, market, makerSold) = _unpackOrder(word);
         if (f.size > size) revert InvalidFill();
 
@@ -462,13 +474,34 @@ abstract contract Exchange {
         if (equity < int256(required)) revert InsufficientMargin(account);
     }
 
-    /// Margin an order locks while it rests: its notional at the market's margin rate.
+    /// Margin an order locks while it rests.
     function _orderMargin(uint256 order) private view returns (uint256) {
         (uint256 price, uint256 size, uint8 market,) = _unpackOrder(order);
         if (size == 0) return 0;
 
         (, uint256 marginBps,,,) = _unpackMarket(_readMarket(_locate(marketKey(market)), market));
 
+        return _margin(size, price, marginBps);
+    }
+
+    /// Margin freed by filling `filled` of an order with `remaining` left: what the order
+    /// required before the fill minus what the rest still requires. Rounding each fill's own
+    /// share instead would leave dust locked once the order empties.
+    function _released(uint256 remaining, uint256 filled, uint256 price, uint256 marginBps)
+        private
+        pure
+        returns (uint256)
+    {
+        return _margin(remaining, price, marginBps) - _margin(remaining - filled, price, marginBps);
+    }
+
+    /// An order's notional at the market's margin rate, rounded down. Every lock and release goes
+    /// through this, so the amounts released over an order's fills add up to what it locked.
+    function _margin(uint256 size, uint256 price, uint256 marginBps)
+        private
+        pure
+        returns (uint256)
+    {
         return size * price * marginBps / BPS;
     }
 
