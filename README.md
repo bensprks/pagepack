@@ -20,11 +20,15 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 | 10 records | 139,537 | 67,910 (-51%) | 49,489 (-65%) |
 | 30 records | 375,029 | 135,056 (-64%) | 82,081 (-78%) |
 | 30 records, 3 pages | 375,065 | 144,456 (-61%) | 104,077 (-72%) |
-| 2 unpacked records | 45,333 | 57,600 (+27%) | n/a |
+| 2 unpacked records | 45,333 | 57,600 (+27%) | – |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Single-record writes and records that
 were never packed cost more than a mapping, because finding a record costs gas too.
+
+In the [ERC-6909 example](examples/erc6909), a 30-move batch settlement costs 73% less than the
+same ledger on mappings, and a pool swap through ERC-20 facades costs 5% less than with standalone
+ERC-20 tokens.
 
 ## How it works
 
@@ -96,8 +100,8 @@ batch with one `eth_call`.
 | Path | What's there |
 | --- | --- |
 | `src/` | The library. A single file, `PagePack.sol`, with no dependencies. |
-| `test/` | Unit and fuzz tests, plus `test/gas/` benchmarks against a plain mapping. |
-| `examples/` | An ERC-6909 multi-token ledger built on pagepack *(next)*. |
+| `test/` | Unit and fuzz tests, example tests, and `test/gas/` benchmarks. |
+| `examples/erc6909/` | A multi-token ledger with ERC-20 facades and batch settlement, built on pagepack. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |
 
 ## Development
@@ -107,7 +111,7 @@ Requires [Foundry](https://getfoundry.sh). All execution uses Monad's gas schedu
 
 ```bash
 make test   # unit and fuzz tests
-make gas    # benchmarks and the comparison table above
+make gas    # benchmarks and the comparison tables above
 make fmt
 ```
 

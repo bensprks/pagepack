@@ -1,0 +1,7 @@
+{
+  "Batch settlement, 10 moves": "161281",
+  "Batch settlement, 30 moves": "397613",
+  "ERC-20 transfer": "61401",
+  "ERC-6909 transfer": "48440",
+  "Swap through a pool": "95532"
+}
