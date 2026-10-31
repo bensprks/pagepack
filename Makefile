@@ -9,7 +9,7 @@ build:
 test:
 	$(FORGE) test
 
-# Runs the benchmarks (each scenario is its own cold transaction) and prints the comparison table.
+# Runs the benchmarks (each scenario is its own cold transaction) and prints the comparison tables.
 gas:
 	$(FORGE) test --match-path 'test/gas/*'
 	$(PYTHON) test/gas/report.py
