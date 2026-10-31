@@ -28,6 +28,31 @@ TABLES = [
             "2 unpacked records",
         ],
     },
+    {
+        "title": "Exchange example",
+        "label": "Operation",
+        "columns": [
+            ("Mappings", "exchange-mapping"),
+            ("pagepack", "exchange-pagepack"),
+            ("pagepack + hints", "exchange-pagepack-hinted"),
+        ],
+        "rows": [
+            "Re-quote 1 order, maker in 6 markets",
+            "Re-quote 3 orders, one market",
+            "Taker vs 3 makers",
+            "Taker vs 14 makers",
+        ],
+    },
+    {
+        "title": "Exchange example: order slot reuse",
+        "label": "Operation",
+        "columns": [("Mappings", "exchange-slots")],
+        "compare_to_first_row": True,
+        "rows": [
+            "New order in a never-used slot",
+            "New order in a reused slot",
+        ],
+    },
 ]
 
 
