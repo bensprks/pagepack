@@ -28,7 +28,7 @@ were never packed cost more than a mapping, because finding a record costs gas t
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
 dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker filling against
-14 makers 49% less than the same exchange on mappings.
+14 makers 48% less than the same exchange on mappings.
 
 ## How it works
 

@@ -80,7 +80,7 @@ every record by hash. It is not a property of the data:
 The explainer also names batched, multi-account forwarder flow as the regime its suite did not
 measure. That is most of mainnet. The [example](README.md) models the account side of it: on the
 same transaction shapes, packing cuts the multi-market re-quote by 45% (52% with hints) and the
-14-maker fill by 42% (49% with hints). Perpl's real transactions touch several times more pages
+14-maker fill by 41% (48% with hints). Perpl's real transactions touch several times more pages
 than the model, so the absolute saving would be larger.
 
 ## Method

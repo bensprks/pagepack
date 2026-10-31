@@ -67,15 +67,15 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 159,057 | 87,413 (-45%) | 76,973 (-52%) |
-| Re-quote 3 orders, one market | 107,419 | 88,069 (-18%) | 71,307 (-34%) |
-| Taker vs 3 makers | 203,046 | 140,798 (-31%) | 131,774 (-35%) |
-| Taker vs 14 makers | 690,466 | 401,272 (-42%) | 354,386 (-49%) |
+| Re-quote 1 order, maker in 6 markets | 159,143 | 87,499 (-45%) | 77,059 (-52%) |
+| Re-quote 3 orders, one market | 107,677 | 88,327 (-18%) | 71,565 (-34%) |
+| Taker vs 3 makers | 205,749 | 143,501 (-30%) | 134,477 (-35%) |
+| Taker vs 14 makers | 703,080 | 413,886 (-41%) | 367,000 (-48%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 86,791 |
-| New order in a reused slot | 69,791 (-20%) |
+| New order in a never-used slot | 86,834 |
+| New order in a reused slot | 69,834 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.
