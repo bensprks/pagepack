@@ -35,3 +35,6 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+      - name: Build a downstream consumer
+        run: ./scripts/check-consumer.sh
