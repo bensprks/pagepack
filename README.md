@@ -20,11 +20,15 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 | 10 records | 139,537 | 67,910 (-51%) | 49,489 (-65%) |
 | 30 records | 375,029 | 135,056 (-64%) | 82,081 (-78%) |
 | 30 records, 3 pages | 375,065 | 144,456 (-61%) | 104,077 (-72%) |
-| 2 unpacked records | 45,333 | 57,600 (+27%) | n/a |
+| 2 unpacked records | 45,333 | 57,600 (+27%) | – |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Single-record writes and records that
 were never packed cost more than a mapping, because finding a record costs gas too.
+
+In the [order-book exchange example](examples/exchange), modelled on the transactions that
+dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
+14 makers 48% less than the same exchange on mappings.
 
 ## How it works
 
@@ -62,6 +66,13 @@ were never packed cost more than a mapping, because finding a record costs gas t
 forge install bensprks/pagepack
 ```
 
+Then add this line to your project's `remappings.txt`. Without it, Foundry's automatic
+remapping points `pagepack/` at the repository root rather than `src/`, and the import fails.
+
+```text
+pagepack/=lib/pagepack/src/
+```
+
 ```solidity
 import {PagePack, Record, Space} from "pagepack/PagePack.sol";
 
@@ -96,8 +107,8 @@ batch with one `eth_call`.
 | Path | What's there |
 | --- | --- |
 | `src/` | The library. A single file, `PagePack.sol`, with no dependencies. |
-| `test/` | Unit and fuzz tests, plus `test/gas/` benchmarks against a plain mapping. |
-| `examples/` | An ERC-6909 multi-token ledger built on pagepack *(next)*. |
+| `test/` | Unit and fuzz tests, example tests, and `test/gas/` benchmarks. |
+| `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |
 
 ## Development
@@ -107,9 +118,12 @@ Requires [Foundry](https://getfoundry.sh). All execution uses Monad's gas schedu
 
 ```bash
 make test   # unit and fuzz tests
-make gas    # benchmarks and the comparison table above
+make gas    # benchmarks and the comparison tables above
 make fmt
 ```
+
+CI checks gas snapshots. If a change moves any benchmark, run `make gas` and commit the updated
+`snapshots/` along with the change.
 
 ## License
 

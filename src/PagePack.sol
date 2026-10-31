@@ -463,13 +463,17 @@ library PagePack {
 
     /// Copies `count` words to an empty destination and clears the source. Zero words are
     /// skipped since the destination already holds zero there.
+    ///
+    /// The source is cleared before the destination is written. MIP-8 charges 17,000 gas when a
+    /// page's occupied-slot count reaches a new high within the transaction, so writing first
+    /// would briefly raise the count and pay that charge even when both words share a page.
     function _move(uint256 from, uint256 to, uint256 count) private {
         for (uint256 i; i < count; ++i) {
             uint256 value = _load(from + i);
 
             if (value != 0) {
-                _store(to + i, value);
                 _store(from + i, 0);
+                _store(to + i, value);
             }
         }
     }
