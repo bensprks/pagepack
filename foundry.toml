@@ -1,0 +1,23 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+libs = ["lib"]
+solc = "0.8.38"
+evm_version = "osaka"
+optimizer = true
+optimizer_runs = 200
+
+# Execute with Monad's gas schedule, including MIP-8 page pricing. Every gas number in this
+# repo depends on it.
+network = "monad"
+
+[profile.default.fuzz]
+runs = 512
+
+[fmt]
+line_length = 100
+
+[lint]
+# Zero-initialised locals and reverts inside validation loops are deliberate here.
+exclude_lints = ["uninitialized-local", "require-revert-in-loop"]

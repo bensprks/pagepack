@@ -1,0 +1,14 @@
+# Foundry
+cache/
+out/
+broadcast/
+
+# Analysis
+analysis/.venv/
+analysis/data/
+__pycache__/
+
+# Local secrets (RPC keys)
+.env
+.env.*
+!.env.example
