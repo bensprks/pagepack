@@ -10,7 +10,10 @@ import {Record} from "pagepack/PagePack.sol";
 /// @notice The account side of an order-book perpetuals exchange: collateral, positions and
 ///         resting orders, with cross-margin checks. Matching is out of scope. `settle` applies
 ///         the fills a match produced, whether that match ran on-chain against a resting book
-///         (like Perpl) or off-chain in an operator's engine (like Tiny).
+///         (like Perpl) or off-chain in an operator's engine.
+///
+/// This is a storage benchmark, not a production exchange. It trusts its operator as the
+/// matching and risk engine: see {settle} and the trust assumptions in the README.
 ///
 /// Every piece of state is a one-word record addressed by a bytes32 key, and where a record
 /// lives is left to {_locate}. The PagePack version and the plain-mapping baseline share all of
@@ -205,6 +208,12 @@ abstract contract Exchange {
 
     /// @notice Applies one taker's fills against resting maker orders, charges the taker fee and
     ///         checks the taker's margin.
+    /// @dev Trusts the operator, which stands in for the matching and risk engine:
+    ///      - It names the taker. Nothing here checks that the taker agreed to the trade.
+    ///      - A fill names a maker's slot and size, not an expected price or order version. If
+    ///        the maker re-quotes that slot first, the fill takes the new order.
+    ///      - Only the taker's margin is checked. A fill can leave a maker under-margined, e.g.
+    ///        an ask far below the mark price; a real exchange checks the maker or liquidates.
     function settle(address taker, Fill[] calldata fills, Hint[] calldata hints)
         external
         withHints(hints)

@@ -39,6 +39,26 @@ reused slot costs 20% less, with or without pagepack.
 caller can pass them in any order and each lookup costs one `TLOAD`. A market maker or a
 settlement operator knows the layout and can always pass them; anyone else passes none.
 
+## Trust assumptions
+
+This is a storage benchmark, kept small on purpose. It enforces its own accounting (balances,
+locked margin, the taker's margin), but trusts the operator that calls `settle` as the matching
+and risk engine:
+
+- **Authorization.** The operator names the taker. Nothing on-chain checks that the taker agreed
+  to the trade. A real exchange verifies a signed order or has the taker send the transaction.
+- **Order identity.** A fill names a maker's slot and a size, not an expected price or order
+  version. Slots are reused, so if the maker re-quotes between the match and settlement, the
+  fill takes the new order.
+- **Maker risk.** Only the taker's margin is checked after a fill. Filling a maker can leave it
+  under-margined, e.g. an ask far below the mark price. A real exchange checks makers too, or
+  liquidates them.
+- **Prices and rates.** Mark prices are set by the admin as a stand-in for an oracle, and a
+  market's margin rate is fixed when it is listed. There is no funding or liquidation.
+
+None of these change which records a transaction touches, so they don't affect the storage
+comparison.
+
 ## Results
 
 From `make gas`. Each operation is a fresh transaction with cold storage. 8 markets and 16
