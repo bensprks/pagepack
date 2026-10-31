@@ -82,8 +82,9 @@ account; the others quote one market. The taker is a long-tail account and is no
 - **Settlement** saves on every maker and grows with the batch: each maker's account, order and
   position share a page with other makers'.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
-  funding records. Perpl's real re-quotes touch 16 to 46 pages against this model's 4 to 14
-  (see [MAINNET.md](MAINNET.md)), so the absolute savings there would be larger.
+  funding records. In the mainnet sample, Perpl's re-quotes touched 16 to 46 pages against this
+  model's 4 to 14 (see [MAINNET.md](MAINNET.md)). Whether a real exchange saves more is a
+  hypothesis: the extra pages hold state this model doesn't consolidate.
 
 ## Rebalancing
 
