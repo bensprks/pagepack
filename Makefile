@@ -14,8 +14,10 @@ gas:
 	$(FORGE) test --match-path 'test/gas/*'
 	$(PYTHON) test/gas/report.py
 
+# forge fmt only covers src/ and test/ by default.
 fmt:
 	$(FORGE) fmt
+	$(FORGE) fmt examples
 
 clean:
 	$(FORGE) clean
