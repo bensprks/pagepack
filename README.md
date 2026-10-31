@@ -66,6 +66,13 @@ dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker 
 forge install bensprks/pagepack
 ```
 
+Then add this line to your project's `remappings.txt`. Without it, Foundry's automatic
+remapping points `pagepack/` at the repository root rather than `src/`, and the import fails.
+
+```text
+pagepack/=lib/pagepack/src/
+```
+
 ```solidity
 import {PagePack, Record, Space} from "pagepack/PagePack.sol";
 
