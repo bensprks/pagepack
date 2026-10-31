@@ -20,10 +20,13 @@ import {TestToken} from "../examples/utils/TestToken.sol";
 ///   page 0   all 8 market records, the fee account, maker 0 (account, 8 order slots, 6
 ///            positions) and makers 1-6 (account, 4 order slots, 1 position each)
 ///   page 1   makers 7-15
+///
+/// Each maker's records sit on one page; _pack asserts it.
 contract ExchangeGasTest is Test {
     uint8 internal constant MARKETS = 8;
     uint8 internal constant BOOK = 1;
     uint256 internal constant MAKERS = 16;
+    uint256 internal constant RECORDS_PER_PAGE = 64;
 
     address internal admin = makeAddr("admin");
     address internal operator = makeAddr("operator");
@@ -305,38 +308,77 @@ contract ExchangeGasTest is Test {
     }
 
     function _pack() internal {
-        bytes32[] memory keys = new bytes32[](64 * 2);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](RECORDS_PER_PAGE * 2);
         uint256 count;
+        uint256 next;
 
+        bytes32[] memory shared = new bytes32[](MARKETS + 1);
         for (uint8 m; m < MARKETS; ++m) {
-            keys[count++] = packedExchange.marketKey(m);
+            shared[m] = packedExchange.marketKey(m);
         }
-        keys[count++] = packedExchange.accountKey(fees);
+        shared[MARKETS] = packedExchange.accountKey(fees);
 
-        bytes32[] memory first = _makerKeys(makers[0], 8, 6);
-        for (uint256 i; i < first.length; ++i) {
-            // Market records are already placed above.
-            if (i > 8 && (i - 9) % 2 == 1) continue;
-            keys[count++] = first[i];
-        }
+        (count, next) = _placeGroup(placements, count, next, shared);
 
-        for (uint256 i = 1; i < MAKERS; ++i) {
-            address maker = makers[i];
-            keys[count++] = packedExchange.accountKey(maker);
-            for (uint8 s; s < 4; ++s) {
-                keys[count++] = packedExchange.orderKey(maker, s);
-            }
-            keys[count++] = packedExchange.positionKey(maker, BOOK);
+        for (uint256 i; i < MAKERS; ++i) {
+            (count, next) = _placeGroup(placements, count, next, _ownKeys(i));
         }
 
-        PagePack.Placement[] memory placements = new PagePack.Placement[](count);
-        for (uint256 i; i < count; ++i) {
-            placements[i] = PagePack.Placement(keys[i], i);
+        assembly ("memory-safe") {
+            mstore(placements, count)
         }
 
         vm.prank(admin);
         packedExchange.rebalance(new bytes32[](0), placements);
 
-        assertEq(packedExchange.recordsPerPage(), 64);
+        assertEq(packedExchange.recordsPerPage(), RECORDS_PER_PAGE);
+
+        // Fixture invariant: each maker's records share one page.
+        for (uint256 i; i < MAKERS; ++i) {
+            bytes32[] memory keys = _ownKeys(i);
+            uint256 page = (packedExchange.hintOf(keys[0]) - 1) / RECORDS_PER_PAGE;
+
+            for (uint256 k = 1; k < keys.length; ++k) {
+                assertEq(
+                    (packedExchange.hintOf(keys[k]) - 1) / RECORDS_PER_PAGE, page, "split maker"
+                );
+            }
+        }
+    }
+
+    /// A maker's own records: its account, order slots and positions.
+    function _ownKeys(uint256 index) internal view returns (bytes32[] memory keys) {
+        address maker = makers[index];
+        uint8 slots = index == 0 ? 8 : 4;
+        uint8 positions = index == 0 ? 6 : 1;
+
+        keys = new bytes32[](1 + slots + positions);
+        keys[0] = packedExchange.accountKey(maker);
+
+        for (uint8 s; s < slots; ++s) {
+            keys[1 + s] = packedExchange.orderKey(maker, s);
+        }
+
+        for (uint8 p; p < positions; ++p) {
+            keys[1 + slots + p] = packedExchange.positionKey(maker, index == 0 ? p : BOOK);
+        }
+    }
+
+    /// Places `keys` at consecutive indices from `next`, first moving to the next page if they
+    /// would not fit on the current one.
+    function _placeGroup(
+        PagePack.Placement[] memory placements,
+        uint256 count,
+        uint256 next,
+        bytes32[] memory keys
+    ) internal pure returns (uint256, uint256) {
+        uint256 offset = next % RECORDS_PER_PAGE;
+        if (offset + keys.length > RECORDS_PER_PAGE) next += RECORDS_PER_PAGE - offset;
+
+        for (uint256 i; i < keys.length; ++i) {
+            placements[count++] = PagePack.Placement(keys[i], next++);
+        }
+
+        return (count, next);
     }
 }
