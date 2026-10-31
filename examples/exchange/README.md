@@ -56,8 +56,8 @@ and risk engine:
 - **Prices and rates.** Mark prices are set by the admin as a stand-in for an oracle, and a
   market's margin rate is fixed when it is listed. There is no funding or liquidation.
 
-None of these change which records a transaction touches, so they don't affect the storage
-comparison.
+Both backends omit these checks consistently. Adding them may change the storage access pattern
+and measured savings.
 
 ## Results
 
