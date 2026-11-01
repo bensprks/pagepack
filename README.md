@@ -61,8 +61,8 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 - **Identity words.** Each packed record is stored with its identity, `keccak256(space, key)`,
   so any lookup can confirm it found the right record. Stale data can't be returned.
 - **Directory.** One page per space lists a 22-bit fingerprint and packed index for up to 1,016
-  records. The fingerprints are evenly spread hash bits, so interpolation search finds most
-  entries in about three probes.
+  records, 8 to a storage word. The fingerprints are evenly spread hash bits, so a search can
+  guess which word to read and usually settles in one or two reads.
 
 ### Finding a record
 
@@ -101,6 +101,28 @@ ignore `HOME`. Without a hint, or with a wrong one, the lookup searches the dire
 that page once per transaction. Every path ends at an identity word or the flag, so a wrong or
 stale hint can cost gas but never returns the wrong record. Load a batch's hints once with
 `useHints` and every `find` in the transaction uses them.
+
+A search interpolates which directory word should hold the key's fingerprint, reads it and
+compares all 8 entries at once. A miss rules out everything on one side of that word, so the
+next guess is close. Records at home cost the same to search for as packed ones. Over random
+directories, with the page already loaded, from `make gas`:
+
+| Directory and record | Probes, mean | Probes, max | Gas, mean | Gas, max |
+| --- | ---: | ---: | ---: | ---: |
+| 64 packed, packed record | 1.25 | 3 | 968 | 1,998 |
+| 64 packed, record at home | 1.33 | 3 | 1,006 | 2,012 |
+| 512 packed, packed record | 1.81 | 4 | 1,294 | 2,592 |
+| 512 packed, record at home | 1.92 | 4 | 1,348 | 2,601 |
+| 1016 packed, packed record | 1.94 | 4 | 1,362 | 2,592 |
+| 1016 packed, record at home | 1.96 | 4 | 1,368 | 2,606 |
+
+Probes are the directory words read after the count. Fingerprints chosen to defeat the guess, as
+keys ground to be packed could be, make the search fall back to bisection after five probes,
+which caps it at 12.
+
+Each lookup without a hint searches again, even for a record found earlier in the call. Look a
+record up once per call and pass the `Record` along, as long as nothing in between could
+rebalance (see [Using records safely](#using-records-safely)).
 
 ### Rebalancing
 

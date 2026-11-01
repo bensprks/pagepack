@@ -177,6 +177,9 @@ library PagePack {
     // 127, indices below 1024 and slots come from hashes, so none of it can overflow in practice.
 
     /// @notice Locates the record for `key`, using a hint from {useHints} if there is one.
+    /// @dev Without a hint, every call searches the directory, which costs about 1,000 to 1,400
+    ///      gas once its page is loaded. Look a record up once per call and pass the Record along
+    ///      while nothing can rebalance.
     function find(Space s, bytes32 key) internal view returns (Record) {
         unchecked {
             uint256 id = _identity(s, key);
