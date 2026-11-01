@@ -34,35 +34,96 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 ## How it works
 
 ```
-          one per space                        packed pages
-   ┌───────┬───────────────────┐   ┌────┬──────────┬────┬──────────┬─────
-   │ count │ fingerprint→index │   │ id │ data     │ id │ data     │ ...
-   └───────┴───────────────────┘   └────┴──────────┴────┴──────────┴─────
-             directory                  index 0         index 1
+  directory: one page per space
+  ┌───────┬─────────┬─────────┬─────┬─────────┐
+  │ count │ entry 0 │ entry 1 │ ... │ entry n │   entry = fingerprint → packed index,
+  └───────┴─────────┴─────────┴─────┴─────────┘   sorted by fingerprint, 8 per slot
 
-   unpacked record → its own page at keccak256(space, key), like a mapping entry
+  packed pages: records used together, side by side
+  ┌────┬──────┬────┬──────┬─────┬────┬──────┬────────┐
+  │ id │ data │ id │ data │ ... │ id │ data │ unused │   floor(128 / (width + 1)) records
+  └────┴──────┴────┴──────┴─────┴────┴──────┴────────┘   per page: 42 for two-word records
+   index 0     index 1           index 41
+
+  home pages: one per record at keccak256(space, key), like a mapping entry
+  ┌──────┬──────────────────────────────────────┬──────┐
+  │ data │ unused                               │ flag │   the record's data until it is
+  └──────┴──────────────────────────────────────┴──────┘   packed; the flag is set while packed
 ```
 
 - **Spaces.** A space is a family of fixed-width records (say, one-word balances). Records only
   share pages with records in the same space, so put entities used together in one space.
-- **Home and packed locations.** Every record starts at a home location derived from its key.
-  An admin calls `rebalance` to move hot records into numbered slots on packed pages. A record is
-  never split across pages.
+- **Home and packed locations.** Every record starts on its home page, derived from its key. An
+  admin calls `rebalance` to move hot records into numbered slots on packed pages. A record is
+  never split across pages, and while it is packed, a flag on its home page says so.
 - **Identity words.** Each packed record is stored with its identity, `keccak256(space, key)`,
   so any lookup can confirm it found the right record. Stale data can't be returned.
 - **Directory.** One page per space lists a 22-bit fingerprint and packed index for up to 1,016
-  records. A lookup without a hint loads that page (once per transaction) and searches it. The
-  fingerprints are evenly spread hash bits, so interpolation search finds most entries in about
-  three probes.
-- **Hints.** A caller that knows the layout can skip the directory. A packed record's hint is
-  its index plus one, checked against the identity word. A record that isn't packed has the hint
-  `HOME`, checked against a flag on its home page, so it costs what a mapping entry does. Load a
-  batch's hints once with `useHints` and every `find` in the transaction uses them. Wrong or
-  stale hints fall back to the directory: they can cost gas but never return the wrong record.
-- **Rebalancing.** The layout is chosen off-chain from observed activity (see `analysis/`) and
-  applied with `rebalance(evictions, placements)`. A call names only the records that change and
-  says where each ends up. It applies as one step, so order doesn't matter and swaps work. The
-  library has no access control; the contract using it decides who can call it.
+  records. The fingerprints are evenly spread hash bits, so interpolation search finds most
+  entries in about three probes.
+
+### Finding a record
+
+```
+                                  find(key)
+                                      │
+          ┌───────────────────────────┼────────────────────────────┐
+          │ hint = index + 1          │ hint = HOME                │ no hint
+          v                           v                            │
+  identity word at index        packed flag on home                │
+  belongs to this key?          page is clear?                     │
+          │                           │                            │
+     ┌────┴────┐                 ┌────┴────┐                       │
+     │ yes     │ no              │ yes     │ no                    │
+     v         │                 v         │                       │
+  packed       │               home        │                       │
+               └───────────────────────────┴───────────┬───────────┘
+                                                       v
+                                 search the directory for the key's fingerprint
+                                                       │
+                                             ┌─────────┴─────────┐
+                                             │ found             │ not found
+                                             v                   v
+                                  identity word matches?        home
+                                             │
+                                        ┌────┴────┐
+                                        │ yes     │ no
+                                        v         v
+                                     packed      home
+```
+
+`find(key)` checks a hint first if there is one. A packed record's hint is its index plus one,
+checked against the identity word. A record that isn't packed has the hint `HOME`, checked
+against its packed flag, so it costs what a mapping entry does. Without a hint, or with a wrong
+one, the lookup searches the directory, loading that page once per transaction. Every path ends
+at an identity word or the flag, so a wrong or stale hint can cost gas but never returns the
+wrong record. Load a batch's hints once with `useHints` and every `find` in the transaction uses
+them.
+
+### Rebalancing
+
+```
+  rebalance(evictions: [a], placements: [b at index 0, c at index 1])
+
+  before                                  after
+  ┌──────────┬──────────┐                 ┌──────────┬──────────┐
+  │ index 0  │ index 1  │   home          │ index 0  │ index 1  │   home
+  │ a        │ b        │   c             │ b        │ c        │   a
+  └──────────┴──────────┘                 └──────────┴──────────┘
+
+  1. plan    find each named record and check the final layout is valid
+  2. clear   read every moving record into memory and clear its old slots
+  3. write   write each record to its new slots, so b can take a's index while a leaves
+  4. index   packed-to-packed moves rewrite their directory entry in place;
+             packing or evicting rebuilds the directory once
+```
+
+The layout is chosen off-chain from observed activity (see `analysis/`) and applied with
+`rebalance(evictions, placements)`. A call names only the records that change and where each
+ends up, and it applies as one step, so order doesn't matter and swaps and cycles work. Because
+every old slot is cleared before any new one is written, moves within a page also avoid MIP-8's
+state-growth charge. The library has no access control; the contract using it decides who can
+call it. [Planning layouts](#planning-layouts) covers capacity, collisions and cost.
 
 ## Usage
 
