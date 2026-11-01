@@ -23,7 +23,13 @@ contract MappingBalances {
 
 /// The same balances stored as one-word PagePack records.
 contract PackedBalances {
-    Space internal immutable BALANCES = PagePack.space("bench.balances", 1);
+    Space internal immutable BALANCES;
+
+    constructor(bool homeHints) {
+        BALANCES = homeHints
+            ? PagePack.spaceWithHomeHints("bench.balances", 1)
+            : PagePack.space("bench.balances", 1);
+    }
 
     function balanceOf(bytes32 key) external view returns (uint256) {
         return BALANCES.find(key).read(0);
@@ -64,16 +70,19 @@ contract PackedBalances {
 ///
 /// Layout: bench keys 0-29 sit together on one packed page, keys 30-59 are spread over three
 /// pages, keys 60+ are never packed, and 400 filler records give the directory a realistic depth.
+/// A second copy in a home-hint space measures HOME hints for the records that aren't packed.
 contract PagePackGasTest is Test {
     uint256 internal constant FILLER = 400;
     uint256 internal constant RECORDS_PER_PAGE = 64;
 
     MappingBalances internal mappingBalances;
     PackedBalances internal packedBalances;
+    PackedBalances internal homeHintBalances;
 
     function setUp() public {
         mappingBalances = new MappingBalances();
-        packedBalances = new PackedBalances();
+        packedBalances = new PackedBalances(false);
+        homeHintBalances = new PackedBalances(true);
 
         bytes32[] memory keys = new bytes32[](70);
         for (uint256 i; i < keys.length; ++i) {
@@ -82,6 +91,7 @@ contract PagePackGasTest is Test {
 
         mappingBalances.seed(keys);
         packedBalances.seed(keys);
+        homeHintBalances.seed(keys);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](60 + FILLER);
 
@@ -99,6 +109,7 @@ contract PagePackGasTest is Test {
         }
 
         packedBalances.pack(placements);
+        homeHintBalances.pack(placements);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -181,8 +192,16 @@ contract PagePackGasTest is Test {
         _bumpPacked("2 unpacked records", 60, 2);
     }
 
-    function test_gas_hinted_unpacked_2() public {
-        _bumpHinted("2 unpacked records", 60, 2);
+    function test_gas_mapping_unpacked_home_2() public {
+        _bumpMapping("2 unpacked records, home-hint space", 60, 2);
+    }
+
+    function test_gas_packed_unpacked_home_2() public {
+        _bumpPacked(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+    }
+
+    function test_gas_hinted_unpacked_home_2() public {
+        _bumpHinted(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -201,35 +220,53 @@ contract PagePackGasTest is Test {
     }
 
     function _bumpPacked(string memory scenario, uint256 first, uint256 count) internal {
+        _bumpPacked(packedBalances, scenario, first, count);
+    }
+
+    function _bumpPacked(
+        PackedBalances target,
+        string memory scenario,
+        uint256 first,
+        uint256 count
+    ) internal {
         bytes32[] memory keys = _keys(first, count);
 
-        packedBalances.bump(keys);
+        target.bump(keys);
         vm.snapshotGasLastCall("pagepack", scenario);
 
-        _assertBumped(keys);
+        _assertBumped(target, keys);
     }
 
     function _bumpHinted(string memory scenario, uint256 first, uint256 count) internal {
+        _bumpHinted(packedBalances, scenario, first, count);
+    }
+
+    function _bumpHinted(
+        PackedBalances target,
+        string memory scenario,
+        uint256 first,
+        uint256 count
+    ) internal {
         bytes32[] memory keys = _keys(first, count);
         uint256[] memory hints = new uint256[](count);
 
         for (uint256 i; i < count; ++i) {
-            hints[i] = packedBalances.hintOf(keys[i]);
+            hints[i] = target.hintOf(keys[i]);
             assertTrue(hints[i] != 0);
         }
 
         // Reading hints above warmed the pages. Measure in a fresh transaction.
-        vm.cool(address(packedBalances));
+        vm.cool(address(target));
 
-        packedBalances.bump(keys, hints);
+        target.bump(keys, hints);
         vm.snapshotGasLastCall("pagepack-hinted", scenario);
 
-        _assertBumped(keys);
+        _assertBumped(target, keys);
     }
 
-    function _assertBumped(bytes32[] memory keys) internal view {
+    function _assertBumped(PackedBalances target, bytes32[] memory keys) internal view {
         for (uint256 i; i < keys.length; ++i) {
-            assertEq(packedBalances.balanceOf(keys[i]), 1_001);
+            assertEq(target.balanceOf(keys[i]), 1_001);
         }
     }
 

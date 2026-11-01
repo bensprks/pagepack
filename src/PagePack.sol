@@ -6,7 +6,8 @@ import {LibDirectory} from "./LibDirectory.sol";
 /// A family of fixed-width records, such as "balances" or "allowances".
 ///
 /// Records can only share a page with records in the same space, so put entities that are used
-/// together into one space. The low byte holds the record width in words.
+/// together into one space. The low byte holds the record width in words (7 bits) and, in its top
+/// bit, whether the space keeps home flags for HOME hints.
 type Space is bytes32;
 
 /// The first data word of a record, wherever the record currently lives.
@@ -34,8 +35,9 @@ using PagePack for Record global;
 /// A record lives in one of two places:
 ///
 ///   home     keccak256(space, key), rounded down to a page boundary. Every record starts here,
-///            and it costs the same as a mapping entry. While the record is packed, the last
-///            slot of its home page holds a flag saying so.
+///            and it costs the same as a mapping entry. In a space made with
+///            {spaceWithHomeHints}, the last slot of the home page holds a flag while the record
+///            is packed.
 ///   packed   a numbered slot in the space's packed region, placed there by {rebalance}. Each
 ///            packed record is an identity word followed by its data, so a lookup can confirm it
 ///            found the right record.
@@ -43,7 +45,7 @@ using PagePack for Record global;
 /// Each space keeps one directory page mapping a short fingerprint of every packed record to its
 /// index. A lookup without a hint searches the directory, paying for that page once per
 /// transaction. A lookup with a correct hint skips the directory entirely: a packed index is
-/// checked against the identity word, and a HOME hint against the packed flag.
+/// checked against the identity word, and a HOME hint (home-hint spaces only) against the flag.
 ///
 /// Storage layout of a space, all page-aligned:
 ///
@@ -88,9 +90,13 @@ library PagePack {
     /// Packed indices are stored in 10 bits.
     uint256 internal constant MAX_INDEX = LibDirectory.INDEX_LIMIT;
 
-    /// The hint for a record that isn't packed. Packed records' hints are index + 1, so they
-    /// never reach it.
+    /// The hint for a record that isn't packed, in a space made with {spaceWithHomeHints}. Other
+    /// spaces ignore it. Packed records' hints are index + 1, so they never reach it.
     uint256 internal constant HOME = MAX_INDEX + 1;
+
+    // The low byte of a space: its width, and a bit for spaces that keep home flags.
+    uint256 private constant WIDTH_MASK = 0x7f;
+    uint256 private constant HOME_HINTS = 0x80;
 
     // A move's position when the record is at home.
     uint256 private constant AT_HOME = type(uint256).max;
@@ -102,14 +108,34 @@ library PagePack {
     /// @notice Creates a space of records that are `words` words wide.
     /// @dev Intended for an immutable: `Space immutable BALANCES = PagePack.space("x", 1);`
     function space(string memory name, uint256 words) internal pure returns (Space) {
+        return _space(name, words, 0);
+    }
+
+    /// @notice Like {space}, but packed records leave a flag on their home page, so a HOME hint
+    ///         can confirm a record isn't packed without loading the directory.
+    /// @dev The flag is one live storage word on every packed record's home page, so packing no
+    ///      longer empties those pages. Use this when transactions often touch records that
+    ///      aren't packed and nothing else loads the directory. The choice is part of the space,
+    ///      like its width: the two kinds of space never share storage.
+    function spaceWithHomeHints(string memory name, uint256 words) internal pure returns (Space) {
+        return _space(name, words, HOME_HINTS);
+    }
+
+    function _space(string memory name, uint256 words, uint256 mode) private pure returns (Space) {
         if (words == 0 || words > MAX_WIDTH) revert InvalidWidth(words);
 
-        return Space.wrap((keccak256(bytes(name)) & ~bytes32(uint256(0xff))) | bytes32(words));
+        bytes32 base = keccak256(bytes(name)) & ~bytes32(uint256(0xff));
+        return Space.wrap(base | bytes32(words | mode));
     }
 
     /// @notice Number of data words in each record.
     function width(Space s) internal pure returns (uint256) {
-        return uint256(Space.unwrap(s)) & 0xff;
+        return uint256(Space.unwrap(s)) & WIDTH_MASK;
+    }
+
+    /// @notice Whether the space keeps home flags, so HOME hints work.
+    function homeHints(Space s) internal pure returns (bool) {
+        return uint256(Space.unwrap(s)) & HOME_HINTS != 0;
     }
 
     /// @notice Number of packed records that fit on one page.
@@ -150,11 +176,14 @@ library PagePack {
             uint256 dir = _directory(s);
 
             // The same checks as find(key, hint), repeated here to keep this hot path inline.
-            if (hint - 1 < MAX_INDEX) {
-                uint256 location = _packedSlot(dir, s.width() + 1, hint - 1);
-                if (_load(location) == id) return Record.wrap(location + 1);
-            } else if (hint == HOME) {
-                if (_load(_packedFlag(id)) == 0) return Record.wrap(_home(id));
+            // Most lookups have no hint, so they skip both checks with one comparison.
+            if (hint != 0) {
+                if (hint - 1 < MAX_INDEX) {
+                    uint256 location = _packedSlot(dir, s.width() + 1, hint - 1);
+                    if (_load(location) == id) return Record.wrap(location + 1);
+                } else if (hint == HOME && s.homeHints()) {
+                    if (_load(_packedFlag(id)) == 0) return Record.wrap(_home(id));
+                }
             }
 
             (bool found, uint256 index,) = LibDirectory.search(dir, id);
@@ -182,7 +211,7 @@ library PagePack {
                 uint256 location = _packedSlot(_directory(s), s.width() + 1, hint - 1);
 
                 if (_load(location) == _identity(s, key)) return Record.wrap(location + 1);
-            } else if (hint == HOME) {
+            } else if (hint == HOME && s.homeHints()) {
                 uint256 id = _identity(s, key);
 
                 // The flag shares the home page, so this costs what a mapping entry does.
@@ -219,12 +248,15 @@ library PagePack {
         }
     }
 
-    /// @notice The hint for `key`: its packed index plus one, or HOME if it is not packed.
+    /// @notice The hint for `key`: its packed index plus one. A record that isn't packed has
+    ///         HOME in a home-hint space, and 0 (no hint) elsewhere.
     /// @dev Meant to be called off-chain (via an eth_call wrapper) to build hints for a batch.
     function hintOf(Space s, bytes32 key) internal view returns (uint256) {
         (uint256 index,) = _locate(_directory(s), s.width() + 1, _identity(s, key));
 
-        return index == AT_HOME ? HOME : index + 1;
+        if (index != AT_HOME) return index + 1;
+
+        return s.homeHints() ? HOME : 0;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -282,7 +314,7 @@ library PagePack {
 
         (Move[] memory moves, uint256 added) = _plan(s, dir, stride, evictions, placements);
 
-        _relocate(dir, stride, moves);
+        _relocate(dir, stride, moves, s.homeHints());
         _updateIndices(dir, moves);
 
         if (evictions.length != 0 || added != 0) _rebuild(dir, moves, evictions.length, added);
@@ -356,8 +388,9 @@ library PagePack {
     /// Moves each record's identity and data. Every source is read and cleared before any
     /// destination is written, so a record can move into a slot another is leaving. Clearing
     /// first also keeps a page's occupied-slot count from rising past where it started, so moves
-    /// within a page don't pay MIP-8's 17,000 gas state-growth charge.
-    function _relocate(uint256 dir, uint256 stride, Move[] memory moves) private {
+    /// within a page don't pay MIP-8's 17,000 gas state-growth charge. Home flags are set and
+    /// cleared alongside, when the space keeps them.
+    function _relocate(uint256 dir, uint256 stride, Move[] memory moves, bool flags) private {
         uint256 words = stride - 1;
         uint256[] memory data = new uint256[](moves.length * words);
 
@@ -366,7 +399,7 @@ library PagePack {
 
             uint256 from = _dataSlot(dir, stride, m.id, m.from);
             if (m.from != AT_HOME) _store(from - 1, 0);
-            if (m.to == AT_HOME) _store(_packedFlag(m.id), 0);
+            if (flags && m.to == AT_HOME) _store(_packedFlag(m.id), 0);
 
             // Zero words are skipped: there is nothing to clear and nothing to copy.
             for (uint256 w; w < words; ++w) {
@@ -384,7 +417,7 @@ library PagePack {
 
             uint256 to = _dataSlot(dir, stride, m.id, m.to);
             if (m.to != AT_HOME) _store(to - 1, m.id);
-            if (m.from == AT_HOME) _store(_packedFlag(m.id), 1);
+            if (flags && m.from == AT_HOME) _store(_packedFlag(m.id), 1);
 
             for (uint256 w; w < words; ++w) {
                 uint256 value = data[i * words + w];
@@ -420,8 +453,8 @@ library PagePack {
         return id & ~(PAGE_SIZE - 1);
     }
 
-    /// Set while a record is packed. It sits in the last slot of the home page, which data never
-    /// reaches because records are at most 127 words wide.
+    /// Set while a record is packed, in spaces that keep home flags. It sits in the last slot of
+    /// the home page, which data never reaches because records are at most 127 words wide.
     function _packedFlag(uint256 id) private pure returns (uint256) {
         return _home(id) + PAGE_SIZE - 1;
     }

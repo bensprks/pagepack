@@ -27,6 +27,7 @@ TABLES = [
             "30 records",
             "30 records, 3 pages",
             "2 unpacked records",
+            "2 unpacked records, home-hint space",
         ],
     },
     {

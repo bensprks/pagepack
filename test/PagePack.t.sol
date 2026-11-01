@@ -23,7 +23,7 @@ contract PagePackTest is Test {
     mapping(uint256 fingerprint => uint256 keyPlusOne) internal seen;
 
     function setUp() public {
-        store = new RecordStore(3);
+        store = new RecordStore(3, false);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -36,7 +36,7 @@ contract PagePackTest is Test {
         _fill(key, 10);
 
         assertEq(store.slotOf(key), _home(key));
-        assertEq(store.hintOf(key), PagePack.HOME);
+        assertEq(store.hintOf(key), 0);
         assertEq(store.get(key, 0), 10);
         assertEq(store.get(key, 2), 12);
     }
@@ -79,6 +79,7 @@ contract PagePackTest is Test {
     }
 
     function test_homeHintSkipsDirectory() public {
+        store = new RecordStore(3, true);
         bytes32 key = _key(1);
         _fill(key, 10);
         _pack(_key(2), 0);
@@ -96,6 +97,7 @@ contract PagePackTest is Test {
     }
 
     function test_homeHintForPackedRecordFallsBackToDirectory() public {
+        store = new RecordStore(3, true);
         bytes32 key = _key(1);
         _fill(key, 10);
         _pack(key, 4);
@@ -105,6 +107,7 @@ contract PagePackTest is Test {
     }
 
     function test_packedFlagFollowsRecord() public {
+        store = new RecordStore(3, true);
         bytes32 key = _key(1);
         _fill(key, 10);
         assertEq(_flag(key), 0);
@@ -124,7 +127,7 @@ contract PagePackTest is Test {
 
     function test_widestRecordsLeaveRoomForFlag() public {
         uint256 words = PagePack.MAX_WIDTH;
-        RecordStore widest = new RecordStore(words);
+        RecordStore widest = new RecordStore(words, true);
         bytes32 key = _key(1);
 
         for (uint256 i; i < words; ++i) {
@@ -198,7 +201,7 @@ contract PagePackTest is Test {
         // b shares a's fingerprint, so the directory points at a's slot. The identity word tells
         // them apart and b resolves to its home.
         assertEq(store.slotOf(b), _home(b));
-        assertEq(store.hintOf(b), PagePack.HOME);
+        assertEq(store.hintOf(b), 0);
         assertEq(store.get(b, 0), 20);
         assertEq(store.get(a, 0), 10);
     }
@@ -285,7 +288,7 @@ contract PagePackTest is Test {
 
         store.rebalance(_keys(a), _placement(b, 0));
 
-        assertEq(store.hintOf(a), PagePack.HOME);
+        assertEq(store.hintOf(a), 0);
         assertEq(store.hintOf(b), 1);
         _assertFilled(a, 10);
         _assertFilled(b, 20);
@@ -327,7 +330,7 @@ contract PagePackTest is Test {
         placements[1] = PagePack.Placement(b, 0);
         store.rebalance(_keys(a), placements);
 
-        assertEq(store.hintOf(a), PagePack.HOME);
+        assertEq(store.hintOf(a), 0);
         assertEq(store.hintOf(b), 1);
         assertEq(store.hintOf(c), 2);
         assertEq(store.packedCount(), 2);
@@ -391,7 +394,7 @@ contract PagePackTest is Test {
 
         store.rebalance(_keys(a), _placement(b, 1));
 
-        assertEq(store.hintOf(a), PagePack.HOME);
+        assertEq(store.hintOf(a), 0);
         assertEq(store.hintOf(b), 2);
         _assertFilled(a, 10);
         _assertFilled(b, 20);
@@ -478,10 +481,10 @@ contract PagePackTest is Test {
 
     function test_invalidWidthReverts() public {
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 0));
-        new RecordStore(0);
+        new RecordStore(0, false);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 128));
-        new RecordStore(128);
+        new RecordStore(128, false);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -512,7 +515,7 @@ contract PagePackTest is Test {
 
     function test_wideRecordsLeaveUnusedTail() public {
         // Width 4 plus an identity word: 25 records per page with 3 slots left over.
-        RecordStore wide = new RecordStore(4);
+        RecordStore wide = new RecordStore(4, false);
         assertEq(wide.recordsPerPage(), 25);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](26);
@@ -532,7 +535,7 @@ contract PagePackTest is Test {
     }
 
     function test_fullDirectory() public {
-        store = new RecordStore(1);
+        store = new RecordStore(1, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
@@ -556,7 +559,7 @@ contract PagePackTest is Test {
     /// Evicts and packs records scattered through a full directory, so the rebuild has to splice
     /// entries into the middle of words as well as copy whole ones.
     function test_rebuildsFullDirectory() public {
-        store = new RecordStore(1);
+        store = new RecordStore(1, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 3);
         PagePack.Placement[] memory placements = new PagePack.Placement[](PagePack.MAX_PACKED);
 
@@ -586,7 +589,7 @@ contract PagePackTest is Test {
         for (uint256 i; i < keys.length; ++i) {
             // Originals keep index i, except the three evicted ones; replacements take theirs.
             uint256 hint = i < PagePack.MAX_PACKED ? i + 1 : 8 + (i - PagePack.MAX_PACKED) * 400;
-            if (i >= 7 && i < PagePack.MAX_PACKED && (i - 7) % 400 == 0) hint = PagePack.HOME;
+            if (i >= 7 && i < PagePack.MAX_PACKED && (i - 7) % 400 == 0) hint = 0;
 
             assertEq(store.hintOf(keys[i]), hint);
             assertEq(store.get(keys[i], 0), i + 1);
@@ -594,7 +597,7 @@ contract PagePackTest is Test {
     }
 
     function test_revertsWhenCollisionDeepInDirectory() public {
-        store = new RecordStore(1);
+        store = new RecordStore(1, false);
         (bytes32 a, bytes32 b) = _collidingKeys();
         bytes32[] memory keys = _uniqueKeys(200);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length + 1);
@@ -615,7 +618,7 @@ contract PagePackTest is Test {
     }
 
     function test_revertsWhenDirectoryFull() public {
-        store = new RecordStore(1);
+        store = new RecordStore(1, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 1);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
@@ -685,7 +688,7 @@ contract PagePackTest is Test {
         uint256 packed;
 
         for (uint256 i; i < n; ++i) {
-            assertEq(store.hintOf(_key(i)), indexOf[i] == 0 ? PagePack.HOME : indexOf[i]);
+            assertEq(store.hintOf(_key(i)), indexOf[i]);
             _assertFilled(_key(i), 100 * (i + 1));
 
             if (indexOf[i] == 0) assertEq(store.slotOf(_key(i)), _home(_key(i)));

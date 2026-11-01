@@ -7,8 +7,10 @@ import {PagePack, Space} from "pagepack/PagePack.sol";
 contract RecordStore {
     Space public immutable SPACE;
 
-    constructor(uint256 words) {
-        SPACE = PagePack.space("pagepack.test", words);
+    constructor(uint256 words, bool homeHints) {
+        SPACE = homeHints
+            ? PagePack.spaceWithHomeHints("pagepack.test", words)
+            : PagePack.space("pagepack.test", words);
     }
 
     function get(bytes32 key, uint256 offset) external view returns (uint256) {

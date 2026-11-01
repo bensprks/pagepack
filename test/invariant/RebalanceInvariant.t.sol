@@ -245,7 +245,7 @@ contract RebalanceInvariantTest is Test {
     RebalanceHandler internal handler;
 
     function setUp() public {
-        store = new RecordStore(2);
+        store = new RecordStore(2, true);
         handler = new RebalanceHandler(store);
 
         // The model assumes no two keys share a fingerprint, so any request it accepts is valid.
