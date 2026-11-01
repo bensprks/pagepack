@@ -65,6 +65,12 @@ abstract contract ExchangeTest is Test {
         exchange.listMarket(ETH, 2_000, 2_000, 10);
     }
 
+    function test_markPriceCannotBeZero() public {
+        vm.expectRevert(Exchange.InvalidPrice.selector);
+        vm.prank(admin);
+        exchange.setMarkPrice(ETH, 0);
+    }
+
     function test_depositAndWithdraw() public {
         (uint256 balance,,) = exchange.accountOf(maker);
         assertEq(balance, 1_000_000);

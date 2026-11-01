@@ -127,6 +127,9 @@ abstract contract Exchange {
 
     /// @notice Stand-in for an oracle update.
     function setMarkPrice(uint8 market, uint64 markPrice) external onlyAdmin {
+        // A zero mark price would let every position in the market go without margin.
+        if (markPrice == 0) revert InvalidPrice();
+
         Record record = _locate(marketKey(market));
         (, uint256 marginBps, uint256 feeBps, uint256 last, uint256 volume) =
             _unpackMarket(_readMarket(record, market));
