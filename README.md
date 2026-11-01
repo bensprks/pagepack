@@ -77,9 +77,6 @@ remapping points `pagepack/` at the repository root rather than `src/`, and the 
 pagepack/=lib/pagepack/src/
 ```
 
-pagepack sorts with Solady's `LibSort`. Foundry finds the copy installed with pagepack on its
-own, or uses your project's if it already has Solady.
-
 ```solidity
 import {PagePack, Record, Space} from "pagepack/PagePack.sol";
 
@@ -165,7 +162,7 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
 
 | Path | What's there |
 | --- | --- |
-| `src/` | The library: `PagePack.sol`, with the directory's bit-level format in `LibDirectory.sol`. Its only dependency is Solady's `LibSort`. |
+| `src/` | The library: `PagePack.sol`, with the directory's bit-level format in `LibDirectory.sol` and a sort copied from Solady in `utils/`. No dependencies. |
 | `test/` | Unit, fuzz and invariant tests, example tests, and `test/gas/` benchmarks. |
 | `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |

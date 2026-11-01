@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {LibSort} from "solady/utils/LibSort.sol";
+import {LibSort} from "./utils/LibSort.sol";
 
 /// @title LibDirectory
 /// @notice The directory of a PagePack space: one page mapping a short fingerprint of every packed
