@@ -193,18 +193,13 @@ contract ExchangeGasTest is Test {
     // Hints
     // ------------------------------------------------------------------------------------------
 
-    /// Hints for the packed records among `keys`, as an off-chain caller would build them.
+    /// Hints for `keys`, as an off-chain caller would build them. Records that aren't packed get
+    /// PagePack.HOME.
     function _hints(bytes32[] memory keys) internal view returns (Exchange.Hint[] memory hints) {
         hints = new Exchange.Hint[](keys.length);
-        uint256 count;
 
         for (uint256 i; i < keys.length; ++i) {
-            uint256 hint = packedExchange.hintOf(keys[i]);
-            if (hint != 0) hints[count++] = Exchange.Hint(keys[i], hint);
-        }
-
-        assembly ("memory-safe") {
-            mstore(hints, count)
+            hints[i] = Exchange.Hint(keys[i], packedExchange.hintOf(keys[i]));
         }
     }
 

@@ -181,6 +181,10 @@ contract PagePackGasTest is Test {
         _bumpPacked("2 unpacked records", 60, 2);
     }
 
+    function test_gas_hinted_unpacked_2() public {
+        _bumpHinted("2 unpacked records", 60, 2);
+    }
+
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------

@@ -66,6 +66,70 @@ contract PagePackTest is Test {
         assertEq(store.slotOf(b, 1), _home(b));
     }
 
+    function test_homeHintSkipsDirectory() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(_key(2), 0);
+        uint256 home = _home(key);
+
+        vm.record();
+        assertEq(store.slotOf(key, PagePack.HOME), home);
+
+        // Only the record's home page is read: the packed flag, not the directory.
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        assertEq(reads.length, 1);
+        assertEq(uint256(reads[0]), home + 127);
+
+        assertEq(store.get(key, 1, PagePack.HOME), 11);
+    }
+
+    function test_homeHintForPackedRecordFallsBackToDirectory() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(key, 4);
+
+        assertEq(store.slotOf(key, PagePack.HOME), store.slotOf(key));
+        assertEq(store.get(key, 2, PagePack.HOME), 12);
+    }
+
+    function test_packedFlagFollowsRecord() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        assertEq(_flag(key), 0);
+
+        _pack(key, 4);
+        assertEq(_flag(key), 1);
+
+        // Moving between packed slots leaves it set.
+        _pack(key, 9);
+        assertEq(_flag(key), 1);
+
+        store.rebalance(_keys(key), _noPlacements());
+        assertEq(_flag(key), 0);
+        assertEq(store.slotOf(key, PagePack.HOME), _home(key));
+        _assertFilled(key, 10);
+    }
+
+    function test_widestRecordsLeaveRoomForFlag() public {
+        uint256 words = PagePack.MAX_WIDTH;
+        RecordStore widest = new RecordStore(words);
+        bytes32 key = _key(1);
+
+        for (uint256 i; i < words; ++i) {
+            widest.set(key, i, i + 1);
+        }
+
+        widest.rebalance(_noKeys(), _placement(key, 0));
+        widest.rebalance(_keys(key), _noPlacements());
+
+        for (uint256 i; i < words; ++i) {
+            assertEq(widest.get(key, i, PagePack.HOME), i + 1);
+        }
+
+        uint256 home = uint256(keccak256(abi.encode(widest.SPACE(), key))) & ~uint256(127);
+        assertEq(uint256(vm.load(address(widest), bytes32(home + 127))), 0);
+    }
+
     function test_fingerprintMatchStillChecksIdentity() public {
         (bytes32 a, bytes32 b) = _collidingKeys();
         _fill(a, 10);
@@ -577,6 +641,10 @@ contract PagePackTest is Test {
 
     function _home(bytes32 key) internal view returns (uint256) {
         return _identity(key) & ~uint256(127);
+    }
+
+    function _flag(bytes32 key) internal view returns (uint256) {
+        return uint256(vm.load(address(store), bytes32(_home(key) + 127)));
     }
 
     function _fingerprint(bytes32 key) internal view returns (uint256) {
