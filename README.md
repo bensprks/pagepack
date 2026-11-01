@@ -165,7 +165,7 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
 
 | Path | What's there |
 | --- | --- |
-| `src/` | The library. A single file, `PagePack.sol`, whose only dependency is Solady's `LibSort`. |
+| `src/` | The library: `PagePack.sol`, with the directory's bit-level format in `LibDirectory.sol`. Its only dependency is Solady's `LibSort`. |
 | `test/` | Unit, fuzz and invariant tests, example tests, and `test/gas/` benchmarks. |
 | `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |

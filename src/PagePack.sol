@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {LibSort} from "solady/utils/LibSort.sol";
+import {LibDirectory} from "./LibDirectory.sol";
 
 /// A family of fixed-width records, such as "balances" or "allowances".
 ///
@@ -49,7 +49,7 @@ using PagePack for Record global;
 ///
 ///   D = keccak256(space) rounded down to a page boundary
 ///   D + 0              number of packed records
-///   D + 1 .. D + 127   directory entries, 8 per slot, sorted by fingerprint
+///   D + 1 .. D + 127   directory entries, 8 per slot, sorted by fingerprint (see LibDirectory)
 ///   D + 128 ...        packed pages, floor(128 / (width + 1)) records each
 library PagePack {
     struct Placement {
@@ -82,28 +82,15 @@ library PagePack {
     uint256 internal constant PAGE_SIZE = 128;
     uint256 internal constant MAX_WIDTH = 127;
 
-    /// Directory slots after the header, times 8 entries per slot.
-    uint256 internal constant MAX_PACKED = 127 * 8;
+    /// Records a space's directory can list.
+    uint256 internal constant MAX_PACKED = LibDirectory.CAPACITY;
 
     /// Packed indices are stored in 10 bits.
-    uint256 internal constant MAX_INDEX = 1 << 10;
+    uint256 internal constant MAX_INDEX = LibDirectory.INDEX_LIMIT;
 
     /// The hint for a record that isn't packed. Packed records' hints are index + 1, so they
     /// never reach it.
     uint256 internal constant HOME = MAX_INDEX + 1;
-
-    // A directory entry is 32 bits: a 22-bit fingerprint above a 10-bit packed index. Sorting
-    // entries numerically therefore sorts them by fingerprint. These are plain literals so that
-    // inline assembly can use them.
-    uint256 private constant INDEX_BITS = 10;
-    uint256 private constant INDEX_MASK = 0x3ff;
-    uint256 private constant FINGERPRINT_SHIFT = 234;
-    uint256 private constant ENTRY_BITS = 32;
-    uint256 private constant ENTRY_MASK = 0xffffffff;
-    uint256 private constant ENTRIES_PER_SLOT = 8;
-
-    // Directory search rounds that interpolate before falling back to bisection.
-    uint256 private constant INTERPOLATION_ROUNDS = 4;
 
     // A move's position when the record is at home.
     uint256 private constant AT_HOME = type(uint256).max;
@@ -132,7 +119,7 @@ library PagePack {
 
     /// @notice Number of records currently packed.
     function packedCount(Space s) internal view returns (uint256) {
-        return _load(_directory(s));
+        return LibDirectory.length(_directory(s));
     }
 
     /// @notice The 22-bit fingerprint the directory keeps for `key`.
@@ -140,7 +127,7 @@ library PagePack {
     ///      should check new placements against the packed set and leave one of any clashing pair
     ///      at home; with 1,016 random keys, about 1 layout in 9 contains such a pair.
     function fingerprintOf(Space s, bytes32 key) internal pure returns (uint256) {
-        return _identity(s, key) >> FINGERPRINT_SHIFT;
+        return LibDirectory.fingerprintOf(_identity(s, key));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -170,7 +157,7 @@ library PagePack {
                 if (_load(_packedFlag(id)) == 0) return Record.wrap(_home(id));
             }
 
-            (bool found, uint256 index,) = _search(dir, id);
+            (bool found, uint256 index,) = LibDirectory.search(dir, id);
 
             if (found) {
                 uint256 location = _packedSlot(dir, s.width() + 1, index);
@@ -470,66 +457,6 @@ library PagePack {
     // Directory
     // ------------------------------------------------------------------------------------------
 
-    /// Searches the sorted storage directory. The header and entries share a page, so only the
-    /// first read pays for a page load; each further probe is a 100 gas read.
-    ///
-    /// Fingerprints are hash bits, so they are spread evenly and interpolation finds most entries
-    /// in two or three probes, against ~10 for bisection over a full directory. A skewed set of
-    /// fingerprints (e.g. ground by an attacker hoping to be packed) can defeat interpolation, so
-    /// after a few rounds the search falls back to bisection and stays O(log n).
-    ///
-    /// This is the hot path for every lookup without a hint, hence the assembly: in checked
-    /// Solidity the arithmetic cost several times the storage reads.
-    function _search(uint256 dir, uint256 id)
-        private
-        view
-        returns (bool found, uint256 index, uint256 position)
-    {
-        assembly ("memory-safe") {
-            let fingerprint := shr(FINGERPRINT_SHIFT, id)
-            let low := 0
-            let high := sload(dir)
-
-            // Every fingerprint at positions [low, high) lies in [lowFp, highFp).
-            let lowFp := 0
-            let highFp := shl(22, 1)
-
-            for { let round := 0 } lt(low, high) { round := add(round, 1) } {
-                let mid
-
-                // fingerprint is in [lowFp, highFp), so the interpolated mid is in [low, high).
-                switch lt(round, INTERPOLATION_ROUNDS)
-                case 1 {
-                    let span := sub(high, low)
-                    mid := add(low, div(mul(sub(fingerprint, lowFp), span), sub(highFp, lowFp)))
-                }
-                default { mid := shr(1, add(low, high)) }
-
-                // Entry `mid` is lane mid % 8 of directory word mid / 8.
-                let word := sload(add(add(dir, 1), shr(3, mid)))
-                let entry := and(shr(shl(5, and(mid, 7)), word), ENTRY_MASK)
-                let midFp := shr(INDEX_BITS, entry)
-
-                if eq(midFp, fingerprint) {
-                    found := 1
-                    index := and(entry, INDEX_MASK)
-                    position := mid
-                    break
-                }
-
-                switch lt(midFp, fingerprint)
-                case 1 {
-                    low := add(mid, 1)
-                    lowFp := add(midFp, 1)
-                }
-                default {
-                    high := mid
-                    highFp := midFp
-                }
-            }
-        }
-    }
-
     /// A record's packed index and directory position, or AT_HOME if it isn't packed.
     function _locate(uint256 dir, uint256 stride, uint256 id)
         private
@@ -537,13 +464,9 @@ library PagePack {
         returns (uint256 index, uint256 position)
     {
         bool found;
-        (found, index, position) = _search(dir, id);
+        (found, index, position) = LibDirectory.search(dir, id);
 
         if (!found || _load(_packedSlot(dir, stride, index)) != id) return (AT_HOME, 0);
-    }
-
-    function _entry(uint256 id, uint256 index) private pure returns (uint256) {
-        return ((id >> FINGERPRINT_SHIFT) << INDEX_BITS) | index;
     }
 
     /// Rewrites the index bits of records that moved between packed slots. Their fingerprints
@@ -553,35 +476,24 @@ library PagePack {
             Move memory m = moves[i];
             if (m.from == AT_HOME || m.to == AT_HOME) continue;
 
-            uint256 location = dir + 1 + m.position / ENTRIES_PER_SLOT;
-            uint256 shift = (m.position % ENTRIES_PER_SLOT) * ENTRY_BITS;
-
-            _store(location, (_load(location) & ~(INDEX_MASK << shift)) | (m.to << shift));
+            LibDirectory.setIndex(dir, m.position, m.to);
         }
     }
 
     /// Rebuilds the directory after records were packed or evicted: evicted records' entries
     /// are dropped and new ones merged in by fingerprint.
     function _rebuild(uint256 dir, Move[] memory moves, uint256 evicted, uint256 added) private {
-        uint256 count = _load(dir);
-        uint256 nextCount = count - evicted + added;
-        if (nextCount > MAX_PACKED) revert DirectoryFull();
+        if (LibDirectory.length(dir) - evicted + added > MAX_PACKED) revert DirectoryFull();
 
         (uint256[4] memory removed, uint256[] memory insertions) = _changes(moves, added);
-        uint256[] memory stored = _loadWords(dir, count);
-        uint256[] memory merged = new uint256[]((nextCount + 7) / ENTRIES_PER_SLOT);
 
         (bool collided, uint256 move, uint256 lastMove) =
-            _merge(stored, count, removed, insertions, merged);
+            LibDirectory.rebuild(dir, removed, evicted, insertions);
 
         if (collided) _revertCollision(moves, move, lastMove);
-
-        _writeWords(dir, stored, merged);
-        if (nextCount != count) _store(dir, nextCount);
     }
 
-    /// The directory positions of evicted records, and the entries of newly packed records in
-    /// fingerprint order.
+    /// The directory positions of evicted records, and the entries of newly packed records.
     function _changes(Move[] memory moves, uint256 added)
         private
         pure
@@ -596,14 +508,10 @@ library PagePack {
             if (m.to == AT_HOME) {
                 _mark(removed, m.position);
             } else if (m.from == AT_HOME) {
-                // The move's number rides below the entry, so a collision can name its key.
-                insertions[inserted++] = (_entry(m.id, m.to) << ENTRY_BITS) | i;
+                // Tagged with the move's number, so a collision can name its key.
+                insertions[inserted++] = LibDirectory.taggedEntry(m.id, m.to, i);
             }
         }
-
-        // The sort returns early on sorted input, so a planner can save gas by listing new
-        // records in fingerprint order.
-        LibSort.sort(insertions);
     }
 
     /// Kept entries never share a fingerprint, so at least one side of a clash is an insertion.
@@ -616,134 +524,6 @@ library PagePack {
         }
 
         revert FingerprintCollision(moves[move].key);
-    }
-
-    /// Writes back only the words that changed, clearing any a shorter directory leaves behind.
-    function _writeWords(uint256 dir, uint256[] memory stored, uint256[] memory merged) private {
-        uint256 words = stored.length > merged.length ? stored.length : merged.length;
-
-        for (uint256 w; w < words; ++w) {
-            uint256 word = w < merged.length ? merged[w] : 0;
-            if (w >= stored.length || stored[w] != word) _store(dir + 1 + w, word);
-        }
-    }
-
-    function _loadWords(uint256 dir, uint256 count) private view returns (uint256[] memory words) {
-        words = new uint256[]((count + 7) / ENTRIES_PER_SLOT);
-
-        for (uint256 w; w < words.length; ++w) {
-            words[w] = _load(dir + 1 + w);
-        }
-    }
-
-    /// Merges the stored entries, minus removed ones, with the sorted insertions, packing the
-    /// result 8 to a word into `merged`. Two records with the same fingerprint can't both be
-    /// packed, because lookups could not tell them apart, so a clash stops the merge and reports
-    /// the moves behind both entries (~0 for a stored one).
-    ///
-    /// This walks the whole directory, so it is assembly: in Solidity, bounds checks and checked
-    /// arithmetic cost several hundred gas per entry, over a million for a full directory. Most
-    /// stored words hold no change at all, and those are copied 8 entries at a time.
-    function _merge(
-        uint256[] memory stored,
-        uint256 count,
-        uint256[4] memory removed,
-        uint256[] memory insertions,
-        uint256[] memory merged
-    ) private pure returns (bool collided, uint256 move, uint256 lastMove) {
-        assembly ("memory-safe") {
-            let words := add(stored, 0x20)
-            let next := add(insertions, 0x20)
-            let end := add(next, shl(5, mload(insertions)))
-            let out := add(merged, 0x20)
-
-            let position := 0
-            let produced := 0
-            let word := 0
-            let lastFingerprint := not(0)
-            lastMove := not(0)
-
-            for {} 1 {} {
-                // Fast path: a whole stored word with nothing removed from it, every entry below
-                // the next insertion's fingerprint, and no clash with the entry before it.
-                for {} and(iszero(and(position, 7)), iszero(gt(add(position, 8), count))) {} {
-                    let source := mload(add(words, shl(5, shr(3, position))))
-                    let bits := mload(add(removed, shl(5, shr(8, position))))
-
-                    if and(shr(and(position, 255), bits), 0xff) { break }
-                    if eq(shr(INDEX_BITS, and(source, ENTRY_MASK)), lastFingerprint) { break }
-
-                    // Lane 7 holds the word's largest entry.
-                    let lastInWord := shr(224, source)
-
-                    if lt(next, end) {
-                        let insertion := shr(ENTRY_BITS, mload(next))
-                        if iszero(gt(shr(INDEX_BITS, insertion), shr(INDEX_BITS, lastInWord))) {
-                            break
-                        }
-                    }
-
-                    // The word fills the rest of the output word and spills into the next.
-                    let lanes := shl(5, and(produced, 7))
-                    mstore(add(out, shl(5, shr(3, produced))), or(word, shl(lanes, source)))
-                    word := shr(sub(256, lanes), source)
-
-                    produced := add(produced, 8)
-                    position := add(position, 8)
-                    lastFingerprint := shr(INDEX_BITS, lastInWord)
-                    lastMove := not(0)
-                }
-
-                // Skip removed entries. Positions stay below 1,024, inside the bitmap.
-                for {} lt(position, count) { position := add(position, 1) } {
-                    let bits := mload(add(removed, shl(5, shr(8, position))))
-                    if iszero(and(shr(and(position, 255), bits), 1)) { break }
-                }
-
-                // The next stored entry, or ~0 once they run out, which sorts after everything.
-                let kept := not(0)
-                if lt(position, count) {
-                    let source := mload(add(words, shl(5, shr(3, position))))
-                    kept := and(shr(shl(5, and(position, 7)), source), ENTRY_MASK)
-                }
-
-                let entry := kept
-                move := not(0)
-
-                switch lt(next, end)
-                case 1 {
-                    let insertion := mload(next)
-
-                    if lt(shr(ENTRY_BITS, insertion), kept) {
-                        entry := shr(ENTRY_BITS, insertion)
-                        move := and(insertion, ENTRY_MASK)
-                        next := add(next, 0x20)
-                    }
-                }
-                default { if eq(kept, not(0)) { break } }
-
-                if eq(move, not(0)) { position := add(position, 1) }
-
-                let fingerprint := shr(INDEX_BITS, entry)
-                if eq(fingerprint, lastFingerprint) {
-                    collided := 1
-                    break
-                }
-
-                lastFingerprint := fingerprint
-                lastMove := move
-
-                word := or(word, shl(shl(5, and(produced, 7)), entry))
-                produced := add(produced, 1)
-
-                if iszero(and(produced, 7)) {
-                    mstore(add(out, shl(5, sub(shr(3, produced), 1))), word)
-                    word := 0
-                }
-            }
-
-            if and(produced, 7) { mstore(add(out, shl(5, shr(3, produced))), word) }
-        }
     }
 
     // ------------------------------------------------------------------------------------------
