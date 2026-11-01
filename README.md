@@ -148,10 +148,10 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
   | Operation (one-word records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
   | --- | ---: | ---: | ---: |
   | Empty rebalance | 22,861 | 22,861 | 22,861 |
-  | Swap two records | 59,646 | 63,022 | 61,568 |
-  | Move one record | 97,357 | 101,123 | 98,533 |
-  | Evict one record | 76,638 | 144,474 | 213,647 |
-  | Replace one record with another | 97,723 | 161,699 | 234,259 |
+  | Swap two records | 59,670 | 63,046 | 61,592 |
+  | Move one record | 97,369 | 101,135 | 98,545 |
+  | Evict one record | 77,058 | 144,894 | 214,067 |
+  | Replace one record with another | 98,140 | 162,116 | 234,676 |
   | Resubmit the whole layout | 146,834 | 1,008,154 | 1,980,926 |
 
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
