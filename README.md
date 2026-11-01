@@ -34,11 +34,11 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 ## How it works
 
 ```
-          one per space                       packed pages
-   ┌──────────────────────────┐   ┌──────────────┬──────────────┬─────
-   │ count │ fingerprint→index │   │ id │ data    │ id │ data    │ ...
-   └──────────────────────────┘   └──────────────┴──────────────┴─────
-             directory                 page 0          page 1
+          one per space                        packed pages
+   ┌───────┬───────────────────┐   ┌────┬──────────┬────┬──────────┬─────
+   │ count │ fingerprint→index │   │ id │ data     │ id │ data     │ ...
+   └───────┴───────────────────┘   └────┴──────────┴────┴──────────┴─────
+             directory                  index 0         index 1
 
    unpacked record → its own page at keccak256(space, key), like a mapping entry
 ```
