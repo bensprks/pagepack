@@ -238,14 +238,15 @@ contract RebalanceHandler is Test {
     }
 }
 
-/// forge-config: default.invariant.runs = 64
-/// forge-config: default.invariant.depth = 50
-contract RebalanceInvariantTest is Test {
+/// Runs once per kind of space: with home flags and HOME hints, and without.
+abstract contract RebalanceInvariantTest is Test {
     RecordStore internal store;
     RebalanceHandler internal handler;
 
+    function homeHints() internal pure virtual returns (bool);
+
     function setUp() public {
-        store = new RecordStore(2, true);
+        store = new RecordStore(2, homeHints());
         handler = new RebalanceHandler(store);
 
         // The model assumes no two keys share a fingerprint, so any request it accepts is valid.
@@ -272,16 +273,17 @@ contract RebalanceInvariantTest is Test {
     }
 
     /// Every record holds its data and is found where the model says, by every kind of lookup.
+    /// Spaces without home flags never write one and ignore HOME hints.
     function invariant_recordsMatchModel() public view {
         assertEq(store.packedCount(), handler.packed());
 
         for (uint256 k; k < handler.KEYS(); ++k) {
             bytes32 key = handler.key(k);
             uint256 index = handler.indexOf(k);
-            uint256 hint = index == 0 ? PagePack.HOME : index;
+            uint256 hint = index != 0 ? index : homeHints() ? PagePack.HOME : 0;
 
             assertEq(store.hintOf(key), hint, "hint");
-            assertEq(_flag(key), index == 0 ? 0 : 1, "packed flag");
+            assertEq(_flag(key), index != 0 && homeHints() ? 1 : 0, "packed flag");
 
             for (uint256 w; w < handler.WORDS(); ++w) {
                 uint256 expected = handler.valueOf(k, w);
@@ -296,5 +298,21 @@ contract RebalanceInvariantTest is Test {
     function _flag(bytes32 key) internal view returns (uint256) {
         uint256 home = uint256(keccak256(abi.encode(store.SPACE(), key))) & ~uint256(127);
         return uint256(vm.load(address(store), bytes32(home + 127)));
+    }
+}
+
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantDefaultTest is RebalanceInvariantTest {
+    function homeHints() internal pure override returns (bool) {
+        return false;
+    }
+}
+
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantHomeHintsTest is RebalanceInvariantTest {
+    function homeHints() internal pure override returns (bool) {
+        return true;
     }
 }

@@ -125,6 +125,38 @@ contract PagePackTest is Test {
         _assertFilled(key, 10);
     }
 
+    function test_defaultSpaceKeepsNoFlagsAndIgnoresHomeHints() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 4);
+
+        assertEq(_flag(a), 0);
+        assertEq(store.hintOf(b), 0);
+
+        // HOME is just another wrong hint here: both lookups still find the right record.
+        assertEq(store.slotOf(a, PagePack.HOME), store.slotOf(a));
+        assertEq(store.slotOf(b, PagePack.HOME), _home(b));
+
+        store.rebalance(_keys(a), _noPlacements());
+        assertEq(_flag(a), 0);
+        _assertFilled(a, 10);
+    }
+
+    function test_homeHintSpacesHaveTheirOwnStorage() public {
+        RecordStore plain = new RecordStore(3, false);
+        RecordStore hinted = new RecordStore(3, true);
+        uint256 plainSpace = uint256(Space.unwrap(plain.SPACE()));
+        uint256 hintedSpace = uint256(Space.unwrap(hinted.SPACE()));
+
+        // Same name and width; only the mode bit differs, which moves every slot.
+        assertEq(plainSpace & 0x7f, 3);
+        assertEq(hintedSpace & 0x7f, 3);
+        assertEq(plainSpace ^ hintedSpace, 0x80);
+        assertEq(plain.recordsPerPage(), hinted.recordsPerPage());
+    }
+
     function test_widestRecordsLeaveRoomForFlag() public {
         uint256 words = PagePack.MAX_WIDTH;
         RecordStore widest = new RecordStore(words, true);
