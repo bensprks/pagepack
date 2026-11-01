@@ -2,61 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {PagePack, Record, Space} from "pagepack/PagePack.sol";
-
-/// Baseline: one Solidity mapping entry per balance.
-contract MappingLedger {
-    mapping(bytes32 key => uint256) public balanceOf;
-
-    function seed(bytes32[] calldata keys) external {
-        for (uint256 i; i < keys.length; ++i) {
-            balanceOf[keys[i]] = 1_000;
-        }
-    }
-
-    function bump(bytes32[] calldata keys) external {
-        for (uint256 i; i < keys.length; ++i) {
-            balanceOf[keys[i]] += 1;
-        }
-    }
-}
-
-/// The same ledger with balances stored as one-word PagePack records.
-contract PackedLedger {
-    Space internal immutable BALANCES = PagePack.space("bench.balances", 1);
-
-    function balanceOf(bytes32 key) external view returns (uint256) {
-        return BALANCES.find(key).read(0);
-    }
-
-    function hintOf(bytes32 key) external view returns (uint256) {
-        return BALANCES.hintOf(key);
-    }
-
-    function seed(bytes32[] calldata keys) external {
-        for (uint256 i; i < keys.length; ++i) {
-            BALANCES.find(keys[i]).write(0, 1_000);
-        }
-    }
-
-    function pack(PagePack.Placement[] calldata placements) external {
-        BALANCES.rebalance(new bytes32[](0), placements);
-    }
-
-    function bump(bytes32[] calldata keys) external {
-        for (uint256 i; i < keys.length; ++i) {
-            Record r = BALANCES.find(keys[i]);
-            r.write(0, r.read(0) + 1);
-        }
-    }
-
-    function bump(bytes32[] calldata keys, uint256[] calldata hints) external {
-        for (uint256 i; i < keys.length; ++i) {
-            Record r = BALANCES.find(keys[i], hints[i]);
-            r.write(0, r.read(0) + 1);
-        }
-    }
-}
+import {PagePack} from "pagepack/PagePack.sol";
+import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 
 /// Measures updating N existing balances in one transaction. Each test is its own transaction,
 /// so every page starts cold. Balances stay nonzero, so no state-growth charges are included:
@@ -64,24 +11,28 @@ contract PackedLedger {
 ///
 /// Layout: bench keys 0-29 sit together on one packed page, keys 30-59 are spread over three
 /// pages, keys 60+ are never packed, and 400 filler records give the directory a realistic depth.
+/// A second copy in a home-hint space measures HOME hints for the records that aren't packed.
 contract PagePackGasTest is Test {
     uint256 internal constant FILLER = 400;
     uint256 internal constant RECORDS_PER_PAGE = 64;
 
-    MappingLedger internal mappingLedger;
-    PackedLedger internal packedLedger;
+    MappingBalances internal mappingBalances;
+    PackedBalances internal packedBalances;
+    PackedBalances internal homeHintBalances;
 
     function setUp() public {
-        mappingLedger = new MappingLedger();
-        packedLedger = new PackedLedger();
+        mappingBalances = new MappingBalances();
+        packedBalances = new PackedBalances(false);
+        homeHintBalances = new PackedBalances(true);
 
         bytes32[] memory keys = new bytes32[](70);
         for (uint256 i; i < keys.length; ++i) {
             keys[i] = _key(i);
         }
 
-        mappingLedger.seed(keys);
-        packedLedger.seed(keys);
+        mappingBalances.seed(keys);
+        packedBalances.seed(keys);
+        homeHintBalances.seed(keys);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](60 + FILLER);
 
@@ -98,7 +49,8 @@ contract PagePackGasTest is Test {
             placements[60 + i] = PagePack.Placement(_filler(i), 7 * RECORDS_PER_PAGE + i);
         }
 
-        packedLedger.pack(placements);
+        packedBalances.pack(placements);
+        homeHintBalances.pack(placements);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -181,6 +133,18 @@ contract PagePackGasTest is Test {
         _bumpPacked("2 unpacked records", 60, 2);
     }
 
+    function test_gas_mapping_unpacked_home_2() public {
+        _bumpMapping("2 unpacked records, home-hint space", 60, 2);
+    }
+
+    function test_gas_packed_unpacked_home_2() public {
+        _bumpPacked(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+    }
+
+    function test_gas_hinted_unpacked_home_2() public {
+        _bumpHinted(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+    }
+
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
@@ -188,44 +152,62 @@ contract PagePackGasTest is Test {
     function _bumpMapping(string memory scenario, uint256 first, uint256 count) internal {
         bytes32[] memory keys = _keys(first, count);
 
-        mappingLedger.bump(keys);
+        mappingBalances.bump(keys);
         vm.snapshotGasLastCall("mapping", scenario);
 
         for (uint256 i; i < count; ++i) {
-            assertEq(mappingLedger.balanceOf(keys[i]), 1_001);
+            assertEq(mappingBalances.balanceOf(keys[i]), 1_001);
         }
     }
 
     function _bumpPacked(string memory scenario, uint256 first, uint256 count) internal {
+        _bumpPacked(packedBalances, scenario, first, count);
+    }
+
+    function _bumpPacked(
+        PackedBalances target,
+        string memory scenario,
+        uint256 first,
+        uint256 count
+    ) internal {
         bytes32[] memory keys = _keys(first, count);
 
-        packedLedger.bump(keys);
+        target.bump(keys);
         vm.snapshotGasLastCall("pagepack", scenario);
 
-        _assertBumped(keys);
+        _assertBumped(target, keys);
     }
 
     function _bumpHinted(string memory scenario, uint256 first, uint256 count) internal {
+        _bumpHinted(packedBalances, scenario, first, count);
+    }
+
+    function _bumpHinted(
+        PackedBalances target,
+        string memory scenario,
+        uint256 first,
+        uint256 count
+    ) internal {
         bytes32[] memory keys = _keys(first, count);
         uint256[] memory hints = new uint256[](count);
 
         for (uint256 i; i < count; ++i) {
-            hints[i] = packedLedger.hintOf(keys[i]);
+            hints[i] = target.hintOf(keys[i]);
             assertTrue(hints[i] != 0);
         }
 
         // Reading hints above warmed the pages. Measure in a fresh transaction.
-        vm.cool(address(packedLedger));
+        vm.cool(address(target));
 
-        packedLedger.bump(keys, hints);
+        target.bump(keys, hints);
         vm.snapshotGasLastCall("pagepack-hinted", scenario);
 
-        _assertBumped(keys);
+        _assertBumped(target, keys);
     }
 
-    function _assertBumped(bytes32[] memory keys) internal view {
+    function _assertBumped(PackedBalances target, bytes32[] memory keys) internal view {
         for (uint256 i; i < keys.length; ++i) {
-            assertEq(packedLedger.balanceOf(keys[i]), 1_001);
+            assertEq(target.balanceOf(keys[i]), 1_001);
         }
     }
 

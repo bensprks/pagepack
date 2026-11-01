@@ -301,7 +301,7 @@ abstract contract ExchangeTest is Test {
         fills[0] = Exchange.Fill(account, slot, size);
     }
 
-    function _noHints() internal pure returns (Exchange.Hint[] memory) {}
+    function _noHints() internal pure returns (PagePack.Hint[] memory) {}
 }
 
 contract MappingExchangeTest is ExchangeTest {
@@ -349,9 +349,9 @@ contract PackedExchangeTest is ExchangeTest {
         bytes32[] memory keys = _makerKeys();
         _pack(keys);
 
-        Exchange.Hint[] memory hints = new Exchange.Hint[](keys.length);
+        PagePack.Hint[] memory hints = new PagePack.Hint[](keys.length);
         for (uint256 i; i < keys.length; ++i) {
-            hints[i] = Exchange.Hint(keys[i], _packed().hintOf(keys[i]));
+            hints[i] = PagePack.Hint(keys[i], _packed().hintOf(keys[i]));
         }
 
         vm.prank(operator);

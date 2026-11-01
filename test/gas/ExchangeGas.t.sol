@@ -143,7 +143,7 @@ contract ExchangeGasTest is Test {
         Exchange.QuoteUpdate[] memory updates = new Exchange.QuoteUpdate[](1);
         updates[0] = Exchange.QuoteUpdate(0, 0, true, 2_010, 5);
 
-        Exchange.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[0], 8, 6)) : _none();
+        PagePack.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[0], 8, 6)) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(makers[0]);
@@ -157,7 +157,7 @@ contract ExchangeGasTest is Test {
             updates[i] = Exchange.QuoteUpdate(i, BOOK, true, 2_005 + i, 4);
         }
 
-        Exchange.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[1], 4, 1)) : _none();
+        PagePack.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[1], 4, 1)) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(makers[1]);
@@ -168,7 +168,7 @@ contract ExchangeGasTest is Test {
     /// The taker buys one lot from each of the first `count` of makers 1-15.
     function _settle(Exchange exchange, uint256 count, bool hinted, string memory group) internal {
         Exchange.Fill[] memory fills = new Exchange.Fill[](count);
-        bytes32[] memory keys = new bytes32[](count * 3 + 2);
+        bytes32[] memory keys = new bytes32[](count * 3 + 4);
 
         for (uint256 i; i < count; ++i) {
             address maker = makers[1 + i];
@@ -181,7 +181,11 @@ contract ExchangeGasTest is Test {
         keys[count * 3] = exchange.marketKey(BOOK);
         keys[count * 3 + 1] = exchange.accountKey(fees);
 
-        Exchange.Hint[] memory hints = hinted ? _hints(keys) : _none();
+        // The operator knows the taker too, though its records aren't packed.
+        keys[count * 3 + 2] = exchange.accountKey(taker);
+        keys[count * 3 + 3] = exchange.positionKey(taker, BOOK);
+
+        PagePack.Hint[] memory hints = hinted ? _hints(keys) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(operator);
@@ -193,18 +197,13 @@ contract ExchangeGasTest is Test {
     // Hints
     // ------------------------------------------------------------------------------------------
 
-    /// Hints for the packed records among `keys`, as an off-chain caller would build them.
-    function _hints(bytes32[] memory keys) internal view returns (Exchange.Hint[] memory hints) {
-        hints = new Exchange.Hint[](keys.length);
-        uint256 count;
+    /// Hints for `keys`, as an off-chain caller would build them. Records that aren't packed get
+    /// PagePack.HOME.
+    function _hints(bytes32[] memory keys) internal view returns (PagePack.Hint[] memory hints) {
+        hints = new PagePack.Hint[](keys.length);
 
         for (uint256 i; i < keys.length; ++i) {
-            uint256 hint = packedExchange.hintOf(keys[i]);
-            if (hint != 0) hints[count++] = Exchange.Hint(keys[i], hint);
-        }
-
-        assembly ("memory-safe") {
-            mstore(hints, count)
+            hints[i] = PagePack.Hint(keys[i], packedExchange.hintOf(keys[i]));
         }
     }
 
@@ -233,7 +232,7 @@ contract ExchangeGasTest is Test {
         }
     }
 
-    function _none() internal pure returns (Exchange.Hint[] memory) {}
+    function _none() internal pure returns (PagePack.Hint[] memory) {}
 
     // ------------------------------------------------------------------------------------------
     // Setup

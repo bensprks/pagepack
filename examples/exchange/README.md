@@ -35,9 +35,15 @@ order, a new order overwrites a slot, and cancelled or filled slots keep a nonze
 over a nonzero word avoids MIP-8's 17,000 gas charge for growing state, so placing an order in a
 reused slot costs 19% less, with or without pagepack.
 
-**Hints.** Any call can carry `(key, hint)` pairs. They are stored in transient storage, so the
-caller can pass them in any order and each lookup costs one `TLOAD`. A market maker or a
-settlement operator knows the layout and can always pass them; anyone else passes none.
+**Hints.** Any call can carry `(key, hint)` pairs. The packed exchange hands them to pagepack's
+`useHints`, which keeps them in transient storage for the transaction, so the caller can pass
+them in any order and every lookup picks its hint up. A market maker or a settlement operator
+knows the layout and can always pass them; anyone else passes none.
+
+The exchange's space keeps home flags (`spaceWithHomeHints`). Takers are long-tail accounts that
+are never packed, and with a `HOME` hint for the taker a fully hinted settlement never loads the
+directory. The flags cost one storage word on the home page of each packed record: a few hundred
+words for the active accounts.
 
 ## Trust assumptions
 
@@ -67,20 +73,24 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 159,567 | 87,923 (-45%) | 77,483 (-51%) |
-| Re-quote 3 orders, one market | 108,949 | 89,599 (-18%) | 72,837 (-33%) |
-| Taker vs 3 makers | 205,749 | 143,501 (-30%) | 134,477 (-35%) |
-| Taker vs 14 makers | 703,080 | 413,886 (-41%) | 367,000 (-48%) |
+| Re-quote 1 order, maker in 6 markets | 159,502 | 86,802 (-46%) | 78,429 (-51%) |
+| Re-quote 3 orders, one market | 108,884 | 86,534 (-21%) | 72,829 (-33%) |
+| Taker vs 3 makers | 205,684 | 135,562 (-34%) | 121,060 (-41%) |
+| Taker vs 14 makers | 703,015 | 374,236 (-47%) | 335,136 (-52%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 87,258 |
-| New order in a reused slot | 70,258 (-19%) |
+| New order in a never-used slot | 87,193 |
+| New order in a reused slot | 70,193 (-19%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.
 - **Settlement** saves on every maker and grows with the batch: each maker's account, order and
   position share a page with other makers'.
+- **Without hints, results depend on the records' fingerprints.** Each directory search takes a
+  varying number of probes, and the exchange looks some records up several times per call. Under
+  four different space names, the 14-maker settlement without hints ranged from 374,236 to
+  440,884 gas. Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
   funding records. In the mainnet sample, Perpl's re-quotes touched 16 to 46 pages against this
   model's 4 to 14 (see [MAINNET.md](MAINNET.md)). Whether a real exchange saves more is a
@@ -93,5 +103,6 @@ The admin applies layouts chosen off-chain from recent activity, e.g. daily:
 1. Rank accounts by how often they trade, and markets by how often they are read.
 2. Place each hot account's account, order-slot and position records together, and every market
    record on one page. Records with the same `index / recordsPerPage()` share a page (64 here).
-3. Call `rebalance(evictions, placements)`. Old hints keep working, without the saving, until
-   callers refresh them with `hintOf`.
+3. Call `rebalance(evictions, placements)` with only the records that change. It applies as one
+   step, so a layout can swap records directly. Old hints keep working, without the saving,
+   until callers refresh them with `hintOf`.

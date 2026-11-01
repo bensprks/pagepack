@@ -13,7 +13,7 @@ contract RebalanceGasTest is Test {
 
     function setUp() public {
         // Three data words plus an identity word: 32 records per page.
-        store = new RecordStore(3);
+        store = new RecordStore(3, false);
 
         for (uint256 i; i < 3; ++i) {
             store.set(KEY, i, 100 + i);

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Record} from "pagepack/PagePack.sol";
+import {PagePack, Record} from "pagepack/PagePack.sol";
 import {Exchange} from "../../../examples/exchange/Exchange.sol";
 
 /// Benchmark baseline: the same exchange with every record in an ordinary Solidity mapping, so
@@ -14,7 +14,10 @@ contract MappingExchange is Exchange {
         Exchange(collateral_, admin_, operator_, feeRecipient_)
     {}
 
-    /// The slot Solidity uses for `_records[key]`. Hints are ignored.
+    /// Mappings have nothing to hint.
+    function _useHints(PagePack.Hint[] calldata) internal pure override {}
+
+    /// The slot Solidity uses for `_records[key]`.
     function _locate(bytes32 key) internal pure override returns (Record r) {
         assembly ("memory-safe") {
             mstore(0x00, key)

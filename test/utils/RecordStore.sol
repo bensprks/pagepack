@@ -7,8 +7,10 @@ import {PagePack, Space} from "pagepack/PagePack.sol";
 contract RecordStore {
     Space public immutable SPACE;
 
-    constructor(uint256 words) {
-        SPACE = PagePack.space("pagepack.test", words);
+    constructor(uint256 words, bool homeHints) {
+        SPACE = homeHints
+            ? PagePack.spaceWithHomeHints("pagepack.test", words)
+            : PagePack.space("pagepack.test", words);
     }
 
     function get(bytes32 key, uint256 offset) external view returns (uint256) {
@@ -31,8 +33,26 @@ contract RecordStore {
         return SPACE.find(key, hint).slot();
     }
 
+    /// Loads hints for the rest of the transaction.
+    function useHints(PagePack.Hint[] calldata hints) external {
+        SPACE.useHints(hints);
+    }
+
+    /// Loads hints, then looks `key` up without one, all in one call.
+    function slotOfWithHints(PagePack.Hint[] calldata hints, bytes32 key)
+        external
+        returns (uint256)
+    {
+        SPACE.useHints(hints);
+        return SPACE.find(key).slot();
+    }
+
     function hintOf(bytes32 key) external view returns (uint256) {
         return SPACE.hintOf(key);
+    }
+
+    function fingerprintOf(bytes32 key) external view returns (uint256) {
+        return SPACE.fingerprintOf(key);
     }
 
     function packedCount() external view returns (uint256) {

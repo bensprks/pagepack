@@ -10,8 +10,11 @@ import {Exchange} from "./Exchange.sol";
 ///         off-chain, so each active market maker's account, positions and order slots share a
 ///         page, and every market's record sits on one shared page.
 contract PackedExchange is Exchange {
-    /// Every record kind shares one space so a layout can mix them on a page.
-    Space internal immutable RECORDS = PagePack.space("pagepack.exchange", 1);
+    /// Every record kind shares one space so a layout can mix them on a page. It keeps home flags:
+    /// takers are long-tail accounts that are never packed, and with a HOME hint for the taker a
+    /// fully hinted settlement never loads the directory. The flags cost one word on the home page
+    /// of each packed record, which here means the few hundred records of active accounts.
+    Space internal immutable RECORDS = PagePack.spaceWithHomeHints("pagepack.exchange", 1);
 
     event Rebalanced(uint256 packedCount);
 
@@ -30,7 +33,7 @@ contract PackedExchange is Exchange {
         emit Rebalanced(RECORDS.packedCount());
     }
 
-    /// @notice The PagePack hint for a record key, or 0 if it is not packed.
+    /// @notice The PagePack hint for a record key: its packed index plus one, or `PagePack.HOME`.
     function hintOf(bytes32 key) external view returns (uint256) {
         return RECORDS.hintOf(key);
     }
@@ -39,7 +42,12 @@ contract PackedExchange is Exchange {
         return RECORDS.recordsPerPage();
     }
 
+    /// PagePack keeps the hints in transient storage, and {_locate} picks them up.
+    function _useHints(PagePack.Hint[] calldata hints) internal override {
+        RECORDS.useHints(hints);
+    }
+
     function _locate(bytes32 key) internal view override returns (Record) {
-        return RECORDS.find(key, _hintFor(key));
+        return RECORDS.find(key);
     }
 }

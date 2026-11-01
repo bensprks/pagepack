@@ -1,7 +1,9 @@
 """Renders the gas snapshots written by the benchmarks in test/gas as markdown tables.
 
 Each row's percentages are relative to the first column that has a value for that row, or to
-the first row when a table sets compare_to_first_row.
+the first row when a table sets compare_to_first_row. Tables whose columns aren't alternatives,
+such as directory sizes, set percentages to False. A table can set divide_by to show each value
+per item, e.g. per record when a benchmark packs several at once.
 
 Usage: python3 test/gas/report.py [snapshots-dir]
 """
@@ -26,6 +28,7 @@ TABLES = [
             "30 records",
             "30 records, 3 pages",
             "2 unpacked records",
+            "2 unpacked records, home-hint space",
         ],
     },
     {
@@ -33,6 +36,56 @@ TABLES = [
         "label": "Operation",
         "columns": [("pagepack", "pagepack-rebalance")],
         "rows": ["Move a 3-word record within a page"],
+    },
+    {
+        "title": "Library: rebalancing by number of packed records (one-word records)",
+        "label": "Operation",
+        "columns": [
+            ("64", "pagepack-rebalance-64"),
+            ("512", "pagepack-rebalance-512"),
+            ("1,016", "pagepack-rebalance-1016"),
+        ],
+        "percentages": False,
+        "rows": [
+            "Empty rebalance",
+            "Resubmit the whole layout",
+            "Move one record",
+            "Swap two records",
+            "Evict one record",
+            "Replace one record with another",
+            "Pack every record",
+        ],
+    },
+    {
+        "title": "Library: packing records from home, per record (16 per call)",
+        "label": "Record shape",
+        "columns": [("pagepack", "pagepack-packing")],
+        "percentages": False,
+        "divide_by": 16,
+        "rows": [
+            "1-word records",
+            "3-word records",
+            "8-word records",
+            "8-word records, 1 word set",
+            "1-word records, never written",
+            "1-word records, home-hint space",
+            "1-word records, never written, home-hint space",
+        ],
+    },
+    {
+        "title": "Library: storage left by 512 nonzero one-word records",
+        "label": "Layout",
+        "columns": [
+            ("Live storage words", "footprint-words"),
+            ("Occupied pages", "footprint-pages"),
+        ],
+        "percentages": False,
+        "rows": [
+            "Mapping",
+            "pagepack, nothing packed",
+            "pagepack, all packed",
+            "pagepack with home hints, all packed",
+        ],
     },
     {
         "title": "Exchange example",
@@ -83,6 +136,9 @@ def render(table: dict, directory: Path) -> None:
     for row in table["rows"]:
         values = [group.get(row) for group in groups]
 
+        if table.get("divide_by"):
+            values = [None if v is None else round(v / table["divide_by"]) for v in values]
+
         if table.get("compare_to_first_row"):
             baseline = first_row[0]
         else:
@@ -92,7 +148,7 @@ def render(table: dict, directory: Path) -> None:
         for value in values:
             if value is None:
                 cells.append("–")
-            elif value == baseline:
+            elif value == baseline or not table.get("percentages", True):
                 cells.append(f"{value:,}")
             else:
                 cells.append(f"{value:,} ({(value - baseline) / baseline:+.0%})")

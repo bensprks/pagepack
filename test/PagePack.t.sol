@@ -5,13 +5,25 @@ import {Test} from "forge-std/Test.sol";
 import {PagePack, Space} from "pagepack/PagePack.sol";
 import {RecordStore} from "./utils/RecordStore.sol";
 
+/// Loads hints in one call to the store and looks a record up in another, as a contract would
+/// within one transaction.
+contract HintedCaller {
+    function loadThenFind(RecordStore store, PagePack.Hint[] calldata hints, bytes32 key)
+        external
+        returns (uint256)
+    {
+        store.useHints(hints);
+        return store.slotOf(key);
+    }
+}
+
 contract PagePackTest is Test {
     RecordStore internal store;
 
     mapping(uint256 fingerprint => uint256 keyPlusOne) internal seen;
 
     function setUp() public {
-        store = new RecordStore(3);
+        store = new RecordStore(3, false);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -66,6 +78,152 @@ contract PagePackTest is Test {
         assertEq(store.slotOf(b, 1), _home(b));
     }
 
+    function test_homeHintSkipsDirectory() public {
+        store = new RecordStore(3, true);
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(_key(2), 0);
+        uint256 home = _home(key);
+
+        vm.record();
+        assertEq(store.slotOf(key, PagePack.HOME), home);
+
+        // Only the record's home page is read: the packed flag, not the directory.
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        assertEq(reads.length, 1);
+        assertEq(uint256(reads[0]), home + 127);
+
+        assertEq(store.get(key, 1, PagePack.HOME), 11);
+    }
+
+    function test_homeHintForPackedRecordFallsBackToDirectory() public {
+        store = new RecordStore(3, true);
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(key, 4);
+
+        assertEq(store.slotOf(key, PagePack.HOME), store.slotOf(key));
+        assertEq(store.get(key, 2, PagePack.HOME), 12);
+    }
+
+    function test_packedFlagFollowsRecord() public {
+        store = new RecordStore(3, true);
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        assertEq(_flag(key), 0);
+
+        _pack(key, 4);
+        assertEq(_flag(key), 1);
+
+        // Moving between packed slots leaves it set.
+        _pack(key, 9);
+        assertEq(_flag(key), 1);
+
+        store.rebalance(_keys(key), _noPlacements());
+        assertEq(_flag(key), 0);
+        assertEq(store.slotOf(key, PagePack.HOME), _home(key));
+        _assertFilled(key, 10);
+    }
+
+    function test_defaultSpaceKeepsNoFlagsAndIgnoresHomeHints() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 4);
+
+        assertEq(_flag(a), 0);
+        assertEq(store.hintOf(b), 0);
+
+        // HOME is just another wrong hint here: both lookups still find the right record.
+        assertEq(store.slotOf(a, PagePack.HOME), store.slotOf(a));
+        assertEq(store.slotOf(b, PagePack.HOME), _home(b));
+
+        store.rebalance(_keys(a), _noPlacements());
+        assertEq(_flag(a), 0);
+        _assertFilled(a, 10);
+    }
+
+    function test_homeHintSpacesHaveTheirOwnStorage() public {
+        RecordStore plain = new RecordStore(3, false);
+        RecordStore hinted = new RecordStore(3, true);
+        uint256 plainSpace = uint256(Space.unwrap(plain.SPACE()));
+        uint256 hintedSpace = uint256(Space.unwrap(hinted.SPACE()));
+
+        // Same name and width; only the mode bit differs, which moves every slot.
+        assertEq(plainSpace & 0x7f, 3);
+        assertEq(hintedSpace & 0x7f, 3);
+        assertEq(plainSpace ^ hintedSpace, 0x80);
+        assertEq(plain.recordsPerPage(), hinted.recordsPerPage());
+    }
+
+    function test_widestRecordsLeaveRoomForFlag() public {
+        uint256 words = PagePack.MAX_WIDTH;
+        RecordStore widest = new RecordStore(words, true);
+        bytes32 key = _key(1);
+
+        for (uint256 i; i < words; ++i) {
+            widest.set(key, i, i + 1);
+        }
+
+        widest.rebalance(_noKeys(), _placement(key, 0));
+        widest.rebalance(_keys(key), _noPlacements());
+
+        for (uint256 i; i < words; ++i) {
+            assertEq(widest.get(key, i, PagePack.HOME), i + 1);
+        }
+
+        uint256 home = uint256(keccak256(abi.encode(widest.SPACE(), key))) & ~uint256(127);
+        assertEq(uint256(vm.load(address(widest), bytes32(home + 127))), 0);
+    }
+
+    function test_loadedHintSkipsDirectory() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(key, 3);
+        uint256 expected = store.slotOf(key);
+        PagePack.Hint[] memory hints = _hint(key, 4);
+
+        vm.record();
+        assertEq(store.slotOfWithHints(hints, key), expected);
+
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        _assertNotRead(reads, _directory());
+    }
+
+    function test_loadedHintsLastForTheTransaction() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(key, 3);
+        uint256 expected = store.slotOf(key);
+
+        // Foundry gives each top-level test call fresh transient storage, so a helper makes both
+        // calls inside one.
+        HintedCaller caller = new HintedCaller();
+
+        vm.record();
+        assertEq(caller.loadThenFind(store, _hint(key, 4), key), expected);
+
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        _assertNotRead(reads, _directory());
+    }
+
+    function test_wrongLoadedHintsFallBackToDirectory() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        // Another record's index, an empty index, HOME for a packed record, and a packed index
+        // for a record that isn't packed.
+        assertEq(store.slotOfWithHints(_hint(b, 1), b), store.slotOf(b, 2));
+        assertEq(store.slotOfWithHints(_hint(b, 500), b), store.slotOf(b, 2));
+        assertEq(store.slotOfWithHints(_hint(b, PagePack.HOME), b), store.slotOf(b, 2));
+        assertEq(store.slotOfWithHints(_hint(_key(3), 1), _key(3)), _home(_key(3)));
+    }
+
     function test_fingerprintMatchStillChecksIdentity() public {
         (bytes32 a, bytes32 b) = _collidingKeys();
         _fill(a, 10);
@@ -78,6 +236,14 @@ contract PagePackTest is Test {
         assertEq(store.hintOf(b), 0);
         assertEq(store.get(b, 0), 20);
         assertEq(store.get(a, 0), 10);
+    }
+
+    function test_fingerprintOfMatchesDirectory() public {
+        (bytes32 a, bytes32 b) = _collidingKeys();
+
+        assertEq(store.fingerprintOf(a), _fingerprint(a));
+        assertEq(store.fingerprintOf(a), store.fingerprintOf(b));
+        assertTrue(store.fingerprintOf(_key(1)) < 1 << 22);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -160,11 +326,136 @@ contract PagePackTest is Test {
         _assertFilled(b, 20);
     }
 
+    function test_swapsTwoRecords() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(a, 1);
+        placements[1] = PagePack.Placement(b, 0);
+        store.rebalance(_noKeys(), placements);
+
+        assertEq(store.hintOf(a), 2);
+        assertEq(store.hintOf(b), 1);
+        assertEq(store.packedCount(), 2);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
+    /// a leaves for home, b takes a's index, and c comes from home to take b's.
+    function test_cyclesThroughHome() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        bytes32 c = _key(3);
+        _fill(a, 10);
+        _fill(b, 20);
+        _fill(c, 30);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(c, 1);
+        placements[1] = PagePack.Placement(b, 0);
+        store.rebalance(_keys(a), placements);
+
+        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(b), 1);
+        assertEq(store.hintOf(c), 2);
+        assertEq(store.packedCount(), 2);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+        _assertFilled(c, 30);
+    }
+
+    function test_placementOrderDoesNotMatter() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+
+        // b is listed first but takes the index a only leaves later in the list.
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(b, 0);
+        placements[1] = PagePack.Placement(a, 5);
+        store.rebalance(_noKeys(), placements);
+
+        assertEq(store.hintOf(a), 6);
+        assertEq(store.hintOf(b), 1);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
+    function test_emptyRebalanceWritesNothing() public {
+        _pack(_key(1), 0);
+
+        vm.record();
+        store.rebalance(_noKeys(), _noPlacements());
+
+        (bytes32[] memory reads, bytes32[] memory writes) = vm.accesses(address(store));
+        assertEq(reads.length, 0);
+        assertEq(writes.length, 0);
+    }
+
+    function test_resubmittedLayoutWritesNothing() public {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](3);
+
+        for (uint256 i; i < 3; ++i) {
+            _fill(_key(i), 10 * i);
+            placements[i] = PagePack.Placement(_key(i), i * 5);
+        }
+
+        store.rebalance(_noKeys(), placements);
+
+        vm.record();
+        store.rebalance(_noKeys(), placements);
+
+        (, bytes32[] memory writes) = vm.accesses(address(store));
+        assertEq(writes.length, 0);
+    }
+
+    function test_collisionWithEvictedRecordIsAllowed() public {
+        (bytes32 a, bytes32 b) = _collidingKeys();
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+
+        store.rebalance(_keys(a), _placement(b, 1));
+
+        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(b), 2);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
     function test_revertsWhenIndexTaken() public {
         _pack(_key(1), 0);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 0));
         store.rebalance(_noKeys(), _placement(_key(2), 0));
+    }
+
+    function test_revertsWhenTargetHeldByUnnamedRecord() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 0));
+        store.rebalance(_noKeys(), _placement(b, 0));
+    }
+
+    function test_revertsWhenTwoPlacementsShareIndex() public {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(_key(1), 3);
+        placements[1] = PagePack.Placement(_key(2), 3);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 3));
+        store.rebalance(_noKeys(), placements);
     }
 
     function test_revertsWhenIndexOutOfRange() public {
@@ -184,26 +475,48 @@ contract PagePackTest is Test {
         placements[0] = PagePack.Placement(_key(1), 0);
         placements[1] = PagePack.Placement(_key(1), 1);
 
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, _key(1)));
         store.rebalance(_noKeys(), placements);
     }
 
-    function test_revertsWhenFingerprintsCollide() public {
-        (bytes32 a, bytes32 b) = _collidingKeys();
+    function test_revertsWhenPackedKeyNamedTwice() public {
+        bytes32 a = _key(1);
         _pack(a, 0);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PagePack.FingerprintCollision.selector, _fingerprint(a))
-        );
-        store.rebalance(_noKeys(), _placement(b, 1));
+        bytes32[] memory twice = new bytes32[](2);
+        twice[0] = a;
+        twice[1] = a;
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(twice, _noPlacements());
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(_keys(a), _placement(a, 5));
+
+        // Also when one mention leaves the record where it is.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(_keys(a), _placement(a, 0));
+    }
+
+    /// The new entry sorts after the existing one when its index is higher, and before it when
+    /// lower. Both must name b as a collision, not as a duplicate.
+    function test_revertsWhenFingerprintsCollide() public {
+        (bytes32 a, bytes32 b) = _collidingKeys();
+        _pack(a, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, 2));
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, 0));
     }
 
     function test_invalidWidthReverts() public {
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 0));
-        new RecordStore(0);
+        new RecordStore(0, false);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 128));
-        new RecordStore(128);
+        new RecordStore(128, false);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -234,7 +547,7 @@ contract PagePackTest is Test {
 
     function test_wideRecordsLeaveUnusedTail() public {
         // Width 4 plus an identity word: 25 records per page with 3 slots left over.
-        RecordStore wide = new RecordStore(4);
+        RecordStore wide = new RecordStore(4, false);
         assertEq(wide.recordsPerPage(), 25);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](26);
@@ -254,7 +567,7 @@ contract PagePackTest is Test {
     }
 
     function test_fullDirectory() public {
-        store = new RecordStore(1);
+        store = new RecordStore(1, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
@@ -275,8 +588,69 @@ contract PagePackTest is Test {
         }
     }
 
+    /// Evicts and packs records scattered through a full directory, so the rebuild has to splice
+    /// entries into the middle of words as well as copy whole ones.
+    function test_rebuildsFullDirectory() public {
+        store = new RecordStore(1, false);
+        bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 3);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](PagePack.MAX_PACKED);
+
+        for (uint256 i; i < keys.length; ++i) {
+            store.set(keys[i], 0, i + 1);
+        }
+
+        for (uint256 i; i < placements.length; ++i) {
+            placements[i] = PagePack.Placement(keys[i], i);
+        }
+
+        store.rebalance(_noKeys(), placements);
+
+        bytes32[] memory evictions = new bytes32[](3);
+        PagePack.Placement[] memory replacements = new PagePack.Placement[](3);
+
+        for (uint256 i; i < 3; ++i) {
+            uint256 victim = 7 + i * 400;
+            evictions[i] = keys[victim];
+            replacements[i] = PagePack.Placement(keys[PagePack.MAX_PACKED + i], victim);
+        }
+
+        store.rebalance(evictions, replacements);
+
+        assertEq(store.packedCount(), PagePack.MAX_PACKED);
+
+        for (uint256 i; i < keys.length; ++i) {
+            // Originals keep index i, except the three evicted ones; replacements take theirs.
+            uint256 hint = i < PagePack.MAX_PACKED ? i + 1 : 8 + (i - PagePack.MAX_PACKED) * 400;
+            if (i >= 7 && i < PagePack.MAX_PACKED && (i - 7) % 400 == 0) hint = 0;
+
+            assertEq(store.hintOf(keys[i]), hint);
+            assertEq(store.get(keys[i], 0), i + 1);
+        }
+    }
+
+    function test_revertsWhenCollisionDeepInDirectory() public {
+        store = new RecordStore(1, false);
+        (bytes32 a, bytes32 b) = _collidingKeys();
+        bytes32[] memory keys = _uniqueKeys(200);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length + 1);
+
+        for (uint256 i; i < keys.length; ++i) {
+            placements[i] = PagePack.Placement(keys[i], i);
+        }
+
+        placements[keys.length] = PagePack.Placement(a, 250);
+        store.rebalance(_noKeys(), placements);
+
+        // Above and below a's index.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, 251));
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, 201));
+    }
+
     function test_revertsWhenDirectoryFull() public {
-        store = new RecordStore(1);
+        store = new RecordStore(1, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 1);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
@@ -370,6 +744,25 @@ contract PagePackTest is Test {
 
     function _home(bytes32 key) internal view returns (uint256) {
         return _identity(key) & ~uint256(127);
+    }
+
+    function _directory() internal view returns (uint256) {
+        return uint256(keccak256(abi.encode(store.SPACE()))) & ~uint256(127);
+    }
+
+    function _assertNotRead(bytes32[] memory reads, uint256 location) internal pure {
+        for (uint256 i; i < reads.length; ++i) {
+            assertTrue(uint256(reads[i]) != location, "read the directory");
+        }
+    }
+
+    function _hint(bytes32 key, uint256 hint) internal pure returns (PagePack.Hint[] memory hints) {
+        hints = new PagePack.Hint[](1);
+        hints[0] = PagePack.Hint(key, hint);
+    }
+
+    function _flag(bytes32 key) internal view returns (uint256) {
+        return uint256(vm.load(address(store), bytes32(_home(key) + 127)));
     }
 
     function _fingerprint(bytes32 key) internal view returns (uint256) {
