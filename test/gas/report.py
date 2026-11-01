@@ -1,7 +1,8 @@
 """Renders the gas snapshots written by the benchmarks in test/gas as markdown tables.
 
 Each row's percentages are relative to the first column that has a value for that row, or to
-the first row when a table sets compare_to_first_row.
+the first row when a table sets compare_to_first_row. Tables whose columns aren't alternatives,
+such as directory sizes, set percentages to False.
 
 Usage: python3 test/gas/report.py [snapshots-dir]
 """
@@ -33,6 +34,25 @@ TABLES = [
         "label": "Operation",
         "columns": [("pagepack", "pagepack-rebalance")],
         "rows": ["Move a 3-word record within a page"],
+    },
+    {
+        "title": "Library: rebalancing by number of packed records (one-word records)",
+        "label": "Operation",
+        "columns": [
+            ("64", "pagepack-rebalance-64"),
+            ("512", "pagepack-rebalance-512"),
+            ("1,016", "pagepack-rebalance-1016"),
+        ],
+        "percentages": False,
+        "rows": [
+            "Empty rebalance",
+            "Resubmit the whole layout",
+            "Move one record",
+            "Swap two records",
+            "Evict one record",
+            "Replace one record with another",
+            "Pack every record",
+        ],
     },
     {
         "title": "Exchange example",
@@ -92,7 +112,7 @@ def render(table: dict, directory: Path) -> None:
         for value in values:
             if value is None:
                 cells.append("–")
-            elif value == baseline:
+            elif value == baseline or not table.get("percentages", True):
                 cells.append(f"{value:,}")
             else:
                 cells.append(f"{value:,} ({(value - baseline) / baseline:+.0%})")
