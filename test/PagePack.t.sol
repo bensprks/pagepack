@@ -24,7 +24,7 @@ contract PagePackTest is Test {
         _fill(key, 10);
 
         assertEq(store.slotOf(key), _home(key));
-        assertEq(store.hintOf(key), 0);
+        assertEq(store.hintOf(key), PagePack.HOME);
         assertEq(store.get(key, 0), 10);
         assertEq(store.get(key, 2), 12);
     }
@@ -75,7 +75,7 @@ contract PagePackTest is Test {
         // b shares a's fingerprint, so the directory points at a's slot. The identity word tells
         // them apart and b resolves to its home.
         assertEq(store.slotOf(b), _home(b));
-        assertEq(store.hintOf(b), 0);
+        assertEq(store.hintOf(b), PagePack.HOME);
         assertEq(store.get(b, 0), 20);
         assertEq(store.get(a, 0), 10);
     }
@@ -162,7 +162,7 @@ contract PagePackTest is Test {
 
         store.rebalance(_keys(a), _placement(b, 0));
 
-        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(a), PagePack.HOME);
         assertEq(store.hintOf(b), 1);
         _assertFilled(a, 10);
         _assertFilled(b, 20);
@@ -204,7 +204,7 @@ contract PagePackTest is Test {
         placements[1] = PagePack.Placement(b, 0);
         store.rebalance(_keys(a), placements);
 
-        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(a), PagePack.HOME);
         assertEq(store.hintOf(b), 1);
         assertEq(store.hintOf(c), 2);
         assertEq(store.packedCount(), 2);
@@ -268,7 +268,7 @@ contract PagePackTest is Test {
 
         store.rebalance(_keys(a), _placement(b, 1));
 
-        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(a), PagePack.HOME);
         assertEq(store.hintOf(b), 2);
         _assertFilled(a, 10);
         _assertFilled(b, 20);
@@ -458,7 +458,7 @@ contract PagePackTest is Test {
         for (uint256 i; i < keys.length; ++i) {
             // Originals keep index i, except the three evicted ones; replacements take theirs.
             uint256 hint = i < PagePack.MAX_PACKED ? i + 1 : 8 + (i - PagePack.MAX_PACKED) * 400;
-            if (i >= 7 && i < PagePack.MAX_PACKED && (i - 7) % 400 == 0) hint = 0;
+            if (i >= 7 && i < PagePack.MAX_PACKED && (i - 7) % 400 == 0) hint = PagePack.HOME;
 
             assertEq(store.hintOf(keys[i]), hint);
             assertEq(store.get(keys[i], 0), i + 1);
@@ -553,7 +553,7 @@ contract PagePackTest is Test {
         uint256 packed;
 
         for (uint256 i; i < n; ++i) {
-            assertEq(store.hintOf(_key(i)), indexOf[i]);
+            assertEq(store.hintOf(_key(i)), indexOf[i] == 0 ? PagePack.HOME : indexOf[i]);
             _assertFilled(_key(i), 100 * (i + 1));
 
             if (indexOf[i] == 0) assertEq(store.slotOf(_key(i)), _home(_key(i)));

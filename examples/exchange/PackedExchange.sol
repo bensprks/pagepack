@@ -30,7 +30,7 @@ contract PackedExchange is Exchange {
         emit Rebalanced(RECORDS.packedCount());
     }
 
-    /// @notice The PagePack hint for a record key, or 0 if it is not packed.
+    /// @notice The PagePack hint for a record key: its packed index plus one, or `PagePack.HOME`.
     function hintOf(bytes32 key) external view returns (uint256) {
         return RECORDS.hintOf(key);
     }

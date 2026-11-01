@@ -26,14 +26,16 @@ using PagePack for Record global;
 /// A record lives in one of two places:
 ///
 ///   home     keccak256(space, key), rounded down to a page boundary. Every record starts here,
-///            and it costs the same as a mapping entry.
+///            and it costs the same as a mapping entry. While the record is packed, the last
+///            slot of its home page holds a flag saying so.
 ///   packed   a numbered slot in the space's packed region, placed there by {rebalance}. Each
 ///            packed record is an identity word followed by its data, so a lookup can confirm it
 ///            found the right record.
 ///
 /// Each space keeps one directory page mapping a short fingerprint of every packed record to its
 /// index. A lookup without a hint searches the directory, paying for that page once per
-/// transaction. A lookup with a correct hint skips the directory entirely.
+/// transaction. A lookup with a correct hint skips the directory entirely: a packed index is
+/// checked against the identity word, and a HOME hint against the packed flag.
 ///
 /// Storage layout of a space, all page-aligned:
 ///
@@ -72,6 +74,10 @@ library PagePack {
 
     /// Packed indices are stored in 10 bits.
     uint256 internal constant MAX_INDEX = 1 << 10;
+
+    /// The hint for a record that isn't packed. Packed records' hints are index + 1, so they
+    /// never reach it.
+    uint256 internal constant HOME = MAX_INDEX + 1;
 
     // A directory entry is 32 bits: a 22-bit fingerprint above a 10-bit packed index. Sorting
     // entries numerically therefore sorts them by fingerprint. These are plain literals so that
@@ -162,18 +168,23 @@ library PagePack {
                 uint256 location = _packedSlot(_directory(s), s.width() + 1, hint - 1);
 
                 if (_load(location) == _identity(s, key)) return Record.wrap(location + 1);
+            } else if (hint == HOME) {
+                uint256 id = _identity(s, key);
+
+                // The flag shares the home page, so this costs what a mapping entry does.
+                if (_load(_packedFlag(id)) == 0) return Record.wrap(_home(id));
             }
 
             return find(s, key);
         }
     }
 
-    /// @notice The hint for `key`: its packed index plus one, or 0 if it is not packed.
+    /// @notice The hint for `key`: its packed index plus one, or HOME if it is not packed.
     /// @dev Meant to be called off-chain (via an eth_call wrapper) to build hints for a batch.
     function hintOf(Space s, bytes32 key) internal view returns (uint256) {
         (uint256 index,) = _locate(_directory(s), s.width() + 1, _identity(s, key));
 
-        return index == AT_HOME ? 0 : index + 1;
+        return index == AT_HOME ? HOME : index + 1;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -309,6 +320,7 @@ library PagePack {
 
             uint256 from = _dataSlot(dir, stride, m.id, m.from);
             if (m.from != AT_HOME) _store(from - 1, 0);
+            if (m.to == AT_HOME) _store(_packedFlag(m.id), 0);
 
             // Zero words are skipped: there is nothing to clear and nothing to copy.
             for (uint256 w; w < words; ++w) {
@@ -326,6 +338,7 @@ library PagePack {
 
             uint256 to = _dataSlot(dir, stride, m.id, m.to);
             if (m.to != AT_HOME) _store(to - 1, m.id);
+            if (m.from == AT_HOME) _store(_packedFlag(m.id), 1);
 
             for (uint256 w; w < words; ++w) {
                 uint256 value = data[i * words + w];
@@ -359,6 +372,12 @@ library PagePack {
     /// Page-aligned, so a record of up to 128 words never straddles two pages.
     function _home(uint256 id) private pure returns (uint256) {
         return id & ~(PAGE_SIZE - 1);
+    }
+
+    /// Set while a record is packed. It sits in the last slot of the home page, which data never
+    /// reaches because records are at most 127 words wide.
+    function _packedFlag(uint256 id) private pure returns (uint256) {
+        return _home(id) + PAGE_SIZE - 1;
     }
 
     /// The first data word of a record at packed `index`, or at home.

@@ -1,9 +1,9 @@
 {
   "Empty rebalance": "22811",
-  "Evict one record": "230023",
-  "Move one record": "98379",
-  "Pack every record": "54594467",
-  "Replace one record with another": "250108",
+  "Evict one record": "213537",
+  "Move one record": "98447",
+  "Pack every record": "55117707",
+  "Replace one record with another": "234137",
   "Resubmit the whole layout": "1968660",
-  "Swap two records": "61334"
+  "Swap two records": "61470"
 }
