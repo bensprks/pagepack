@@ -2,7 +2,8 @@
 
 Each row's percentages are relative to the first column that has a value for that row, or to
 the first row when a table sets compare_to_first_row. Tables whose columns aren't alternatives,
-such as directory sizes, set percentages to False.
+such as directory sizes, set percentages to False. A table can set divide_by to show each value
+per item, e.g. per record when a benchmark packs several at once.
 
 Usage: python3 test/gas/report.py [snapshots-dir]
 """
@@ -53,6 +54,22 @@ TABLES = [
             "Evict one record",
             "Replace one record with another",
             "Pack every record",
+        ],
+    },
+    {
+        "title": "Library: packing records from home, per record (16 per call)",
+        "label": "Record shape",
+        "columns": [("pagepack", "pagepack-packing")],
+        "percentages": False,
+        "divide_by": 16,
+        "rows": [
+            "1-word records",
+            "3-word records",
+            "8-word records",
+            "8-word records, 1 word set",
+            "1-word records, never written",
+            "1-word records, home-hint space",
+            "1-word records, never written, home-hint space",
         ],
     },
     {
@@ -118,6 +135,9 @@ def render(table: dict, directory: Path) -> None:
 
     for row in table["rows"]:
         values = [group.get(row) for group in groups]
+
+        if table.get("divide_by"):
+            values = [None if v is None else round(v / table["divide_by"]) for v in values]
 
         if table.get("compare_to_first_row"):
             baseline = first_row[0]
