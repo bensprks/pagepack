@@ -176,16 +176,51 @@ see [Planning layouts](#planning-layouts) for what that costs.
 
 ### Using records safely
 
-A `Record` is a raw storage pointer, so a few rules keep it safe:
+`read` and `write` take a word offset. For named fields, declare a struct as wide as the space
+and lay it over the record, and Solidity handles the field offsets and packing:
 
-- **Keep offsets below the space's width.** `read` and `write` don't check them, and offset
-  `width` is already the next record's identity word.
-- **Don't hold a `Record` across a rebalance.** It points wherever the record was when you looked
-  it up. Look it up again after anything in the same transaction that could rebalance, including
-  an external call that might re-enter.
-- **Store fixed-size values only.** Mappings, dynamic arrays and long strings or bytes keep their
-  contents at slots derived from the record's location, so a move would leave them behind. Keep
-  them in their own storage, keyed by the record's key.
+```solidity
+struct Account {
+    uint128 balance;
+    uint64 nonce;
+    uint64 updatedAt;
+}
+
+Space internal immutable ACCOUNTS = PagePack.space("vault.accounts", 1);
+
+function _account(bytes32 key) internal view returns (Account storage account) {
+    Record r = ACCOUNTS.find(key);
+    assembly ("memory-safe") {
+        account.slot := r
+    }
+}
+```
+
+Solidity reads and writes each field separately. To load the slot only once, read the fields you
+need in one statement and write the changed ones together, after any checks. Each extra field
+written still costs about 100 gas, where a hand-packed word is written once. The
+[exchange example](examples/exchange/Exchange.sol) keeps all of its records this way.
+
+A `Record` is a raw storage pointer, and so is a struct laid over one. A few rules keep them safe:
+
+- **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes keep their contents at
+  slots derived from the record's location, so a move would leave them behind. Keep them in their
+  own storage, keyed by the record's key.
+- **Match the width.** A struct must be exactly as wide as its space, and `read` and `write`
+  offsets must stay below the width: offset `width` is already the next record's identity word.
+  Nothing checks either, so test each struct by writing its last field into an empty record and
+  checking that it reached the record's last word:
+
+  ```solidity
+  _account("probe").updatedAt = 1; // the struct's last field
+  assertNotEq(ACCOUNTS.find("probe").read(ACCOUNTS.width() - 1), 0);
+  ```
+
+  [`test/TypedRecords.t.sol`](test/TypedRecords.t.sol) shows what a wider struct breaks. The
+  exchange's tests run the same check through a harness contract.
+- **Look records up again after anything that could rebalance.** A `Record`, and a struct laid
+  over one, points wherever the record was when you looked it up. Look it up again after anything
+  in the same transaction that could rebalance, including an external call that might re-enter.
 
 ## Planning layouts
 
