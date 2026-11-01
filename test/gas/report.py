@@ -56,6 +56,21 @@ TABLES = [
         ],
     },
     {
+        "title": "Library: storage left by 512 nonzero one-word records",
+        "label": "Layout",
+        "columns": [
+            ("Live storage words", "footprint-words"),
+            ("Occupied pages", "footprint-pages"),
+        ],
+        "percentages": False,
+        "rows": [
+            "Mapping",
+            "pagepack, nothing packed",
+            "pagepack, all packed",
+            "pagepack with home hints, all packed",
+        ],
+    },
+    {
         "title": "Exchange example",
         "label": "Operation",
         "columns": [
