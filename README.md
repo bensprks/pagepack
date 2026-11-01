@@ -102,6 +102,19 @@ contract Ledger {
 `BALANCES.hintOf(key)` returns a record's hint, so an off-chain caller can build hints for a
 batch with one `eth_call`.
 
+### Using records safely
+
+A `Record` is a raw storage pointer, so a few rules keep it safe:
+
+- **Keep offsets below the space's width.** `read` and `write` don't check them, and offset
+  `width` is already the next record's identity word.
+- **Don't hold a `Record` across a rebalance.** It points wherever the record was when you looked
+  it up. Look it up again after anything in the same transaction that could rebalance, including
+  an external call that might re-enter.
+- **Store fixed-size values only.** Mappings, dynamic arrays and long strings or bytes keep their
+  contents at slots derived from the record's location, so a move would leave them behind. Keep
+  them in their own storage, keyed by the record's key.
+
 ## Repository
 
 | Path | What's there |

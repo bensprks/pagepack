@@ -10,6 +10,14 @@ import {LibSort} from "solady/utils/LibSort.sol";
 type Space is bytes32;
 
 /// The first data word of a record, wherever the record currently lives.
+///
+/// A Record is a raw storage pointer, and nothing checks how it is used:
+/// - Offsets aren't bounds-checked. Offset `width` is already the next record's identity word.
+/// - It goes stale when the record moves. Look the record up again after anything in the same
+///   transaction that could rebalance, including an external call that might re-enter.
+/// - Records hold fixed-size values only. Mappings, dynamic arrays and long strings or bytes
+///   keep their contents at slots derived from the record's location, so a move would leave
+///   them behind. Keep such data in its own storage, keyed by the record's key.
 type Record is uint256;
 
 using PagePack for Space global;
@@ -236,12 +244,14 @@ library PagePack {
     // Records
     // ------------------------------------------------------------------------------------------
 
+    /// @notice Reads word `offset` of the record. Unchecked: keep `offset` below the width.
     function read(Record r, uint256 offset) internal view returns (uint256 value) {
         assembly ("memory-safe") {
             value := sload(add(r, offset))
         }
     }
 
+    /// @notice Writes word `offset` of the record. Unchecked: keep `offset` below the width.
     function write(Record r, uint256 offset, uint256 value) internal {
         assembly ("memory-safe") {
             sstore(add(r, offset), value)
