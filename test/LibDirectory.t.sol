@@ -2,66 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {LibDirectory} from "../src/LibDirectory.sol";
 import {LibSort} from "../src/utils/LibSort.sol";
-
-/// Exposes LibDirectory over one directory, and reads and writes it the slow, obvious way.
-contract DirectoryHarness {
-    uint256 public constant DIR = uint256(keccak256("pagepack.test.directory")) & ~uint256(127);
-
-    function search(uint256 id) external view returns (bool, uint256, uint256) {
-        return LibDirectory.search(DIR, id);
-    }
-
-    function setIndex(uint256 position, uint256 index) external {
-        LibDirectory.setIndex(DIR, position, index);
-    }
-
-    function rebuild(uint256[4] memory removed, uint256 removedCount, uint256[] memory insertions)
-        external
-        returns (bool, uint256, uint256)
-    {
-        return LibDirectory.rebuild(DIR, removed, removedCount, insertions);
-    }
-
-    function put(uint256[] memory entries) external {
-        _store(DIR, entries.length);
-
-        for (uint256 i; i < entries.length; ++i) {
-            uint256 location = DIR + 1 + i / 8;
-            _store(location, _load(location) | (entries[i] << (32 * (i % 8))));
-        }
-    }
-
-    function entries() external view returns (uint256[] memory list) {
-        list = new uint256[](_load(DIR));
-
-        for (uint256 i; i < list.length; ++i) {
-            list[i] = (_load(DIR + 1 + i / 8) >> (32 * (i % 8))) & 0xffffffff;
-        }
-    }
-
-    /// The header and all 127 entry words.
-    function words() external view returns (uint256[] memory raw) {
-        raw = new uint256[](128);
-
-        for (uint256 i; i < raw.length; ++i) {
-            raw[i] = _load(DIR + i);
-        }
-    }
-
-    function _load(uint256 slot) internal view returns (uint256 value) {
-        assembly {
-            value := sload(slot)
-        }
-    }
-
-    function _store(uint256 slot, uint256 value) internal {
-        assembly {
-            sstore(slot, value)
-        }
-    }
-}
+import {DirectoryHarness, randomEntries} from "./utils/DirectoryHarness.sol";
 
 /// Checks LibDirectory's assembly against plain Solidity versions of the same operations, over
 /// random directories of up to full size.
@@ -79,7 +21,7 @@ contract LibDirectoryTest is Test {
     // ------------------------------------------------------------------------------------------
 
     function testFuzz_searchFindsEveryEntry(uint256 seed) public {
-        uint256[] memory list = _randomEntries(seed, _random(seed, "size") % 1017);
+        uint256[] memory list = randomEntries(seed, _random(seed, "size") % 1017);
         harness.put(list);
 
         for (uint256 i; i < list.length; ++i) {
@@ -92,7 +34,7 @@ contract LibDirectoryTest is Test {
     }
 
     function testFuzz_searchMissesAbsentFingerprints(uint256 seed) public {
-        uint256[] memory list = _randomEntries(seed, _random(seed, "size") % 1017);
+        uint256[] memory list = randomEntries(seed, _random(seed, "size") % 1017);
         harness.put(list);
 
         for (uint256 i; i < 32; ++i) {
@@ -116,7 +58,7 @@ contract LibDirectoryTest is Test {
     function testFuzz_setIndexChangesOneEntry(uint256 seed, uint256 position, uint256 index)
         public
     {
-        uint256[] memory list = _randomEntries(seed, 1 + _random(seed, "size") % 1016);
+        uint256[] memory list = randomEntries(seed, 1 + _random(seed, "size") % 1016);
         harness.put(list);
         position %= list.length;
         index %= 1024;
@@ -134,7 +76,7 @@ contract LibDirectoryTest is Test {
     /// Removes and inserts random entries, sometimes reusing a fingerprint that is already listed,
     /// removed or being inserted, and compares the result with a plain merge.
     function testFuzz_rebuildMatchesReference(uint256 seed) public {
-        uint256[] memory list = _randomEntries(seed, _random(seed, "size") % 1017);
+        uint256[] memory list = randomEntries(seed, _random(seed, "size") % 1017);
         harness.put(list);
 
         (uint256[4] memory removed, bool[] memory isRemoved, uint256 removedCount) =
@@ -191,7 +133,7 @@ contract LibDirectoryTest is Test {
     }
 
     function test_rebuildRemovesEverything() public {
-        uint256[] memory list = _randomEntries(1, 20);
+        uint256[] memory list = randomEntries(1, 20);
         harness.put(list);
 
         uint256[4] memory removed;
@@ -325,32 +267,6 @@ contract LibDirectoryTest is Test {
         }
 
         return seen > 1;
-    }
-
-    /// `count` random entries with distinct fingerprints, sorted. Duplicates are dropped, so a
-    /// few may be missing. Sorting test data with LibSort is fine: it has tests of its own below.
-    function _randomEntries(uint256 seed, uint256 count)
-        internal
-        pure
-        returns (uint256[] memory list)
-    {
-        list = new uint256[](count);
-
-        for (uint256 i; i < count; ++i) {
-            uint256 r = _random(seed, i);
-            list[i] = ((r >> 234) << 10) | (r & 0x3ff);
-        }
-
-        LibSort.sort(list);
-
-        uint256 unique;
-        for (uint256 i; i < count; ++i) {
-            if (unique == 0 || list[i] >> 10 != list[unique - 1] >> 10) list[unique++] = list[i];
-        }
-
-        assembly {
-            mstore(list, unique)
-        }
     }
 
     function _randomRemovals(uint256 seed, uint256 length)

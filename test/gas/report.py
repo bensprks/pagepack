@@ -3,7 +3,8 @@
 Each row's percentages are relative to the first column that has a value for that row, or to
 the first row when a table sets compare_to_first_row. Tables whose columns aren't alternatives,
 such as directory sizes, set percentages to False. A table can set divide_by to show each value
-per item, e.g. per record when a benchmark packs several at once.
+per item, e.g. per record when a benchmark packs several at once. A column can name a third
+value, a scale for snapshots kept in hundredths, which it shows with two decimals.
 
 Usage: python3 test/gas/report.py [snapshots-dir]
 """
@@ -29,6 +30,25 @@ TABLES = [
             "30 records, 3 pages",
             "2 unpacked records",
             "2 unpacked records, home-hint space",
+        ],
+    },
+    {
+        "title": "Library: directory search, page already loaded (1,024 searches each)",
+        "label": "Directory and record",
+        "columns": [
+            ("Probes, mean", "pagepack-search-probes", 100),
+            ("Probes, max", "pagepack-search-probes-max"),
+            ("Gas, mean", "pagepack-search"),
+            ("Gas, max", "pagepack-search-max"),
+        ],
+        "percentages": False,
+        "rows": [
+            "64 packed, packed record",
+            "64 packed, record at home",
+            "512 packed, packed record",
+            "512 packed, record at home",
+            "1016 packed, packed record",
+            "1016 packed, record at home",
         ],
     },
     {
@@ -124,8 +144,9 @@ def load(directory: Path, name: str) -> dict:
 
 
 def render(table: dict, directory: Path) -> None:
-    groups = [load(directory, group) for _, group in table["columns"]]
-    headers = [table["label"]] + [title for title, _ in table["columns"]]
+    groups = [load(directory, column[1]) for column in table["columns"]]
+    scales = [column[2] if len(column) > 2 else None for column in table["columns"]]
+    headers = [table["label"]] + [column[0] for column in table["columns"]]
 
     print(f"### {table['title']}\n")
     print("| " + " | ".join(headers) + " |")
@@ -145,9 +166,11 @@ def render(table: dict, directory: Path) -> None:
             baseline = next(value for value in values if value is not None)
         cells = []
 
-        for value in values:
+        for value, scale in zip(values, scales):
             if value is None:
                 cells.append("–")
+            elif scale:
+                cells.append(f"{value / scale:,.2f}")
             elif value == baseline or not table.get("percentages", True):
                 cells.append(f"{value:,}")
             else:
