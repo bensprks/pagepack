@@ -116,6 +116,14 @@ library PagePack {
         return _load(_directory(s));
     }
 
+    /// @notice The 22-bit fingerprint the directory keeps for `key`.
+    /// @dev Two records with the same fingerprint can't both be packed in one space. Planners
+    ///      should check new placements against the packed set and leave one of any clashing pair
+    ///      at home; with 1,016 random keys, about 1 layout in 9 contains such a pair.
+    function fingerprintOf(Space s, bytes32 key) internal pure returns (uint256) {
+        return _identity(s, key) >> FINGERPRINT_SHIFT;
+    }
+
     // ------------------------------------------------------------------------------------------
     // Lookup
     // ------------------------------------------------------------------------------------------
