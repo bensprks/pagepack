@@ -5,6 +5,18 @@ import {Test} from "forge-std/Test.sol";
 import {PagePack, Space} from "pagepack/PagePack.sol";
 import {RecordStore} from "./utils/RecordStore.sol";
 
+/// Loads hints in one call to the store and looks a record up in another, as a contract would
+/// within one transaction.
+contract HintedCaller {
+    function loadThenFind(RecordStore store, PagePack.Hint[] calldata hints, bytes32 key)
+        external
+        returns (uint256)
+    {
+        store.useHints(hints);
+        return store.slotOf(key);
+    }
+}
+
 contract PagePackTest is Test {
     RecordStore internal store;
 
@@ -128,6 +140,53 @@ contract PagePackTest is Test {
 
         uint256 home = uint256(keccak256(abi.encode(widest.SPACE(), key))) & ~uint256(127);
         assertEq(uint256(vm.load(address(widest), bytes32(home + 127))), 0);
+    }
+
+    function test_loadedHintSkipsDirectory() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(key, 3);
+        uint256 expected = store.slotOf(key);
+        PagePack.Hint[] memory hints = _hint(key, 4);
+
+        vm.record();
+        assertEq(store.slotOfWithHints(hints, key), expected);
+
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        _assertNotRead(reads, _directory());
+    }
+
+    function test_loadedHintsLastForTheTransaction() public {
+        bytes32 key = _key(1);
+        _fill(key, 10);
+        _pack(key, 3);
+        uint256 expected = store.slotOf(key);
+
+        // Foundry gives each top-level test call fresh transient storage, so a helper makes both
+        // calls inside one.
+        HintedCaller caller = new HintedCaller();
+
+        vm.record();
+        assertEq(caller.loadThenFind(store, _hint(key, 4), key), expected);
+
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        _assertNotRead(reads, _directory());
+    }
+
+    function test_wrongLoadedHintsFallBackToDirectory() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        // Another record's index, an empty index, HOME for a packed record, and a packed index
+        // for a record that isn't packed.
+        assertEq(store.slotOfWithHints(_hint(b, 1), b), store.slotOf(b, 2));
+        assertEq(store.slotOfWithHints(_hint(b, 500), b), store.slotOf(b, 2));
+        assertEq(store.slotOfWithHints(_hint(b, PagePack.HOME), b), store.slotOf(b, 2));
+        assertEq(store.slotOfWithHints(_hint(_key(3), 1), _key(3)), _home(_key(3)));
     }
 
     function test_fingerprintMatchStillChecksIdentity() public {
@@ -641,6 +700,21 @@ contract PagePackTest is Test {
 
     function _home(bytes32 key) internal view returns (uint256) {
         return _identity(key) & ~uint256(127);
+    }
+
+    function _directory() internal view returns (uint256) {
+        return uint256(keccak256(abi.encode(store.SPACE()))) & ~uint256(127);
+    }
+
+    function _assertNotRead(bytes32[] memory reads, uint256 location) internal pure {
+        for (uint256 i; i < reads.length; ++i) {
+            assertTrue(uint256(reads[i]) != location, "read the directory");
+        }
+    }
+
+    function _hint(bytes32 key, uint256 hint) internal pure returns (PagePack.Hint[] memory hints) {
+        hints = new PagePack.Hint[](1);
+        hints[0] = PagePack.Hint(key, hint);
     }
 
     function _flag(bytes32 key) internal view returns (uint256) {

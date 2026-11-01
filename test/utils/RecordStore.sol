@@ -31,6 +31,20 @@ contract RecordStore {
         return SPACE.find(key, hint).slot();
     }
 
+    /// Loads hints for the rest of the transaction.
+    function useHints(PagePack.Hint[] calldata hints) external {
+        SPACE.useHints(hints);
+    }
+
+    /// Loads hints, then looks `key` up without one, all in one call.
+    function slotOfWithHints(PagePack.Hint[] calldata hints, bytes32 key)
+        external
+        returns (uint256)
+    {
+        SPACE.useHints(hints);
+        return SPACE.find(key).slot();
+    }
+
     function hintOf(bytes32 key) external view returns (uint256) {
         return SPACE.hintOf(key);
     }
