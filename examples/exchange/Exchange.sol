@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {Record} from "pagepack/PagePack.sol";
+import {PagePack, Record} from "pagepack/PagePack.sol";
 
 /// @title Exchange
 /// @notice The account side of an order-book perpetuals exchange: collateral, positions and
@@ -46,12 +46,6 @@ abstract contract Exchange {
         address maker;
         uint8 slot;
         uint64 size;
-    }
-
-    /// A PagePack hint for one record, from {hintOf} on the packed exchange.
-    struct Hint {
-        bytes32 key;
-        uint256 hint;
     }
 
     event Deposited(address indexed account, uint256 amount);
@@ -100,9 +94,9 @@ abstract contract Exchange {
         _;
     }
 
-    /// Stores the caller's hints for this transaction before the function body runs.
-    modifier withHints(Hint[] calldata hints) {
-        _loadHints(hints);
+    /// Hands the caller's hints to the storage backend before the function body runs.
+    modifier withHints(PagePack.Hint[] calldata hints) {
+        _useHints(hints);
         _;
     }
 
@@ -154,7 +148,7 @@ abstract contract Exchange {
         emit Deposited(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount, Hint[] calldata hints) external withHints(hints) {
+    function withdraw(uint256 amount, PagePack.Hint[] calldata hints) external withHints(hints) {
         Record account = _locate(accountKey(msg.sender));
         (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
 
@@ -176,7 +170,7 @@ abstract contract Exchange {
     ///         every market the caller holds a position in.
     /// @dev This is the hot path on Perpl's mainnet: almost every transaction is a market maker
     ///      moving one to a few quotes.
-    function requote(QuoteUpdate[] calldata updates, Hint[] calldata hints)
+    function requote(QuoteUpdate[] calldata updates, PagePack.Hint[] calldata hints)
         external
         withHints(hints)
     {
@@ -219,7 +213,7 @@ abstract contract Exchange {
     ///        the maker re-quotes that slot first, the fill takes the new order.
     ///      - Only the taker's margin is checked. A fill can leave a maker under-margined, e.g.
     ///        an ask far below the mark price; a real exchange checks the maker or liquidates.
-    function settle(address taker, Fill[] calldata fills, Hint[] calldata hints)
+    function settle(address taker, Fill[] calldata fills, PagePack.Hint[] calldata hints)
         external
         withHints(hints)
     {
@@ -305,24 +299,8 @@ abstract contract Exchange {
     /// Returns where the record for `key` is stored.
     function _locate(bytes32 key) internal view virtual returns (Record);
 
-    /// Hints live in transient storage under their record key, so callers can pass them in any
-    /// order and a lookup costs one TLOAD. They vanish when the transaction ends.
-    function _loadHints(Hint[] calldata hints) private {
-        for (uint256 i; i < hints.length; ++i) {
-            bytes32 key = hints[i].key;
-            uint256 hint = hints[i].hint;
-
-            assembly ("memory-safe") {
-                tstore(key, hint)
-            }
-        }
-    }
-
-    function _hintFor(bytes32 key) internal view returns (uint256 hint) {
-        assembly ("memory-safe") {
-            hint := tload(key)
-        }
-    }
+    /// Makes `hints` available to every {_locate} in this transaction.
+    function _useHints(PagePack.Hint[] calldata hints) internal virtual;
 
     // ------------------------------------------------------------------------------------------
     // Settlement internals

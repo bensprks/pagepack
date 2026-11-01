@@ -35,9 +35,11 @@ order, a new order overwrites a slot, and cancelled or filled slots keep a nonze
 over a nonzero word avoids MIP-8's 17,000 gas charge for growing state, so placing an order in a
 reused slot costs 19% less, with or without pagepack.
 
-**Hints.** Any call can carry `(key, hint)` pairs. They are stored in transient storage, so the
-caller can pass them in any order and each lookup costs one `TLOAD`. A market maker or a
-settlement operator knows the layout and can always pass them; anyone else passes none.
+**Hints.** Any call can carry `(key, hint)` pairs. The packed exchange hands them to pagepack's
+`useHints`, which keeps them in transient storage for the transaction, so the caller can pass
+them in any order and every lookup picks its hint up. A record that isn't packed gets the `HOME`
+hint, which skips the directory too. A market maker or a settlement operator knows the layout
+and can always pass them; anyone else passes none.
 
 ## Trust assumptions
 

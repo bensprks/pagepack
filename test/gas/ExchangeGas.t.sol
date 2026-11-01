@@ -143,7 +143,7 @@ contract ExchangeGasTest is Test {
         Exchange.QuoteUpdate[] memory updates = new Exchange.QuoteUpdate[](1);
         updates[0] = Exchange.QuoteUpdate(0, 0, true, 2_010, 5);
 
-        Exchange.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[0], 8, 6)) : _none();
+        PagePack.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[0], 8, 6)) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(makers[0]);
@@ -157,7 +157,7 @@ contract ExchangeGasTest is Test {
             updates[i] = Exchange.QuoteUpdate(i, BOOK, true, 2_005 + i, 4);
         }
 
-        Exchange.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[1], 4, 1)) : _none();
+        PagePack.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[1], 4, 1)) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(makers[1]);
@@ -181,7 +181,7 @@ contract ExchangeGasTest is Test {
         keys[count * 3] = exchange.marketKey(BOOK);
         keys[count * 3 + 1] = exchange.accountKey(fees);
 
-        Exchange.Hint[] memory hints = hinted ? _hints(keys) : _none();
+        PagePack.Hint[] memory hints = hinted ? _hints(keys) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(operator);
@@ -195,11 +195,11 @@ contract ExchangeGasTest is Test {
 
     /// Hints for `keys`, as an off-chain caller would build them. Records that aren't packed get
     /// PagePack.HOME.
-    function _hints(bytes32[] memory keys) internal view returns (Exchange.Hint[] memory hints) {
-        hints = new Exchange.Hint[](keys.length);
+    function _hints(bytes32[] memory keys) internal view returns (PagePack.Hint[] memory hints) {
+        hints = new PagePack.Hint[](keys.length);
 
         for (uint256 i; i < keys.length; ++i) {
-            hints[i] = Exchange.Hint(keys[i], packedExchange.hintOf(keys[i]));
+            hints[i] = PagePack.Hint(keys[i], packedExchange.hintOf(keys[i]));
         }
     }
 
@@ -228,7 +228,7 @@ contract ExchangeGasTest is Test {
         }
     }
 
-    function _none() internal pure returns (Exchange.Hint[] memory) {}
+    function _none() internal pure returns (PagePack.Hint[] memory) {}
 
     // ------------------------------------------------------------------------------------------
     // Setup

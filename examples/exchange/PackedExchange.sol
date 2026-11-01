@@ -39,7 +39,12 @@ contract PackedExchange is Exchange {
         return RECORDS.recordsPerPage();
     }
 
+    /// PagePack keeps the hints in transient storage, and {_locate} picks them up.
+    function _useHints(PagePack.Hint[] calldata hints) internal override {
+        RECORDS.useHints(hints);
+    }
+
     function _locate(bytes32 key) internal view override returns (Record) {
-        return RECORDS.find(key, _hintFor(key));
+        return RECORDS.find(key);
     }
 }
