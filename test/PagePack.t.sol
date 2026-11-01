@@ -184,7 +184,7 @@ contract PagePackTest is Test {
         placements[0] = PagePack.Placement(_key(1), 0);
         placements[1] = PagePack.Placement(_key(1), 1);
 
-        vm.expectRevert();
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, _key(1)));
         store.rebalance(_noKeys(), placements);
     }
 
@@ -192,9 +192,7 @@ contract PagePackTest is Test {
         (bytes32 a, bytes32 b) = _collidingKeys();
         _pack(a, 0);
 
-        vm.expectRevert(
-            abi.encodeWithSelector(PagePack.FingerprintCollision.selector, _fingerprint(a))
-        );
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
         store.rebalance(_noKeys(), _placement(b, 1));
     }
 

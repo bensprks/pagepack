@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {LibSort} from "solady/utils/LibSort.sol";
+
 /// A family of fixed-width records, such as "balances" or "allowances".
 ///
 /// Records can only share a page with records in the same space, so put entities that are used
@@ -45,11 +47,21 @@ library PagePack {
         uint256 index;
     }
 
+    /// A record named in a rebalance: where it is and where it goes. Internal to {rebalance}.
+    struct Move {
+        bytes32 key;
+        uint256 id;
+        uint256 from;
+        uint256 to;
+        uint256 position;
+    }
+
     error InvalidWidth(uint256 width);
     error IndexOutOfRange(uint256 index);
     error IndexTaken(uint256 index);
     error NotPacked(bytes32 key);
-    error FingerprintCollision(uint256 fingerprint);
+    error DuplicateKey(bytes32 key);
+    error FingerprintCollision(bytes32 key);
     error DirectoryFull();
 
     uint256 internal constant PAGE_SIZE = 128;
@@ -74,8 +86,8 @@ library PagePack {
     // Directory search rounds that interpolate before falling back to bisection.
     uint256 private constant INTERPOLATION_ROUNDS = 4;
 
-    // Marks a directory entry as moved or evicted while a rebalance is in progress.
-    uint256 private constant REMOVED = 1 << 255;
+    // A move's position when the record is at home.
+    uint256 private constant AT_HOME = type(uint256).max;
 
     // ------------------------------------------------------------------------------------------
     // Spaces
@@ -117,7 +129,7 @@ library PagePack {
             uint256 id = _identity(s, key);
             uint256 dir = _directory(s);
 
-            (bool found, uint256 index) = _search(dir, id);
+            (bool found, uint256 index,) = _search(dir, id);
 
             if (found) {
                 uint256 location = _packedSlot(dir, s.width() + 1, index);
@@ -151,14 +163,9 @@ library PagePack {
     /// @notice The hint for `key`: its packed index plus one, or 0 if it is not packed.
     /// @dev Meant to be called off-chain (via an eth_call wrapper) to build hints for a batch.
     function hintOf(Space s, bytes32 key) internal view returns (uint256) {
-        uint256 id = _identity(s, key);
-        uint256 dir = _directory(s);
+        (uint256 index,) = _locate(_directory(s), s.width() + 1, _identity(s, key));
 
-        (bool found, uint256 index) = _search(dir, id);
-
-        if (found && _load(_packedSlot(dir, s.width() + 1, index)) == id) return index + 1;
-
-        return 0;
+        return index == AT_HOME ? 0 : index + 1;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -186,60 +193,137 @@ library PagePack {
     // Rebalancing
     // ------------------------------------------------------------------------------------------
 
-    /// @notice Moves records between their homes and packed slots, then rewrites the directory.
-    /// @dev Applies every eviction first, then each placement in order. A placement's target slot
-    ///      must be empty when it is reached, so move a record out of a slot before moving another
-    ///      in. Placing a record at the index it already occupies does nothing, so a caller can
-    ///      resubmit a whole layout. There is no access control here: the calling contract
-    ///      decides who may rebalance.
+    /// @notice Moves the named records to new positions in one atomic step.
+    /// @dev Each eviction sends a packed record home and each placement puts a record at a packed
+    ///      index. Records that aren't named stay where they are. The request describes the
+    ///      layout after the call, so its order doesn't matter and swaps and cycles work: a
+    ///      placement may target an index whose record is evicted or placed elsewhere in the same
+    ///      call. Placing a record at the index it already holds does nothing, so a caller can
+    ///      resubmit a layout cheaply.
+    ///
+    ///      Reverts if a key is named twice, an eviction names a record that isn't packed, two
+    ///      placements share an index, a placement targets an index held by a record the call
+    ///      doesn't move, two packed records would share a fingerprint, or the directory would
+    ///      overflow.
+    ///
+    ///      There is no access control here: the calling contract decides who may rebalance.
     function rebalance(Space s, bytes32[] memory evictions, Placement[] memory placements)
         internal
     {
+        if (evictions.length == 0 && placements.length == 0) return;
+
         uint256 dir = _directory(s);
         uint256 stride = s.width() + 1;
 
-        uint256[] memory entries = _loadEntries(dir);
-        uint256[] memory added = new uint256[](placements.length);
-        uint256 addedCount;
+        (Move[] memory moves, uint256 added) = _plan(s, dir, stride, evictions, placements);
+
+        _relocate(dir, stride, moves);
+        _updateIndices(dir, moves);
+
+        if (evictions.length != 0 || added != 0) _rebuild(dir, moves, evictions.length, added);
+    }
+
+    /// Works out where each named record is and where it goes, and rejects any request that
+    /// doesn't describe a valid layout. Records already in place need no move and are left out.
+    /// Also returns how many records come from home.
+    function _plan(
+        Space s,
+        uint256 dir,
+        uint256 stride,
+        bytes32[] memory evictions,
+        Placement[] memory placements
+    ) private view returns (Move[] memory moves, uint256 added) {
+        moves = new Move[](evictions.length + placements.length);
+        uint256 count;
+
+        // Bitmaps over packed indices: those holding a record this call names, and those a
+        // placement targets. Indices are below 1,024, so four words cover them.
+        uint256[4] memory named;
+        uint256[4] memory claimed;
 
         for (uint256 i; i < evictions.length; ++i) {
-            uint256 id = _identity(s, evictions[i]);
-            (uint256 from, uint256 position) = _locatePacked(entries, dir, stride, id);
+            bytes32 key = evictions[i];
+            uint256 id = _identity(s, key);
+            (uint256 from, uint256 position) = _locate(dir, stride, id);
 
-            if (from == 0) revert NotPacked(evictions[i]);
+            if (from == AT_HOME) revert NotPacked(key);
+            if (_mark(named, from)) revert DuplicateKey(key);
 
-            _move(from + 1, _home(id), stride - 1);
-            _store(from, 0);
-            entries[position] |= REMOVED;
+            moves[count++] = Move(key, id, from, AT_HOME, position);
         }
 
         for (uint256 i; i < placements.length; ++i) {
             Placement memory p = placements[i];
             if (p.index >= MAX_INDEX) revert IndexOutOfRange(p.index);
+            if (_mark(claimed, p.index)) revert IndexTaken(p.index);
 
             uint256 id = _identity(s, p.key);
-            uint256 to = _packedSlot(dir, stride, p.index);
 
-            uint256 occupant = _load(to);
-            if (occupant == id) continue;
-            if (occupant != 0) revert IndexTaken(p.index);
-
-            (uint256 from, uint256 position) = _locatePacked(entries, dir, stride, id);
-
-            if (from != 0) {
-                _move(from + 1, to + 1, stride - 1);
-                _store(from, 0);
-                entries[position] |= REMOVED;
-            } else {
-                _move(_home(id), to + 1, stride - 1);
+            // A resubmitted record is usually already in place, which also skips the search.
+            if (_load(_packedSlot(dir, stride, p.index)) == id) {
+                if (_mark(named, p.index)) revert DuplicateKey(p.key);
+                continue;
             }
 
-            _store(to, id);
-            added[addedCount++] = ((id >> FINGERPRINT_SHIFT) << INDEX_BITS) | p.index;
+            (uint256 from, uint256 position) = _locate(dir, stride, id);
+
+            if (from == AT_HOME) ++added;
+            else if (_mark(named, from)) revert DuplicateKey(p.key);
+
+            moves[count++] = Move(p.key, id, from, p.index, position);
         }
 
-        uint256 oldCount = entries.length;
-        _writeEntries(dir, oldCount, _merge(entries, added, addedCount));
+        // A target must be empty or hold a record this call names. Since no two placements share
+        // a target, a named occupant is always leaving.
+        for (uint256 i = evictions.length; i < count; ++i) {
+            uint256 index = moves[i].to;
+
+            if (!_isMarked(named, index) && _load(_packedSlot(dir, stride, index)) != 0) {
+                revert IndexTaken(index);
+            }
+        }
+
+        assembly ("memory-safe") {
+            mstore(moves, count)
+        }
+    }
+
+    /// Moves each record's identity and data. Every source is read and cleared before any
+    /// destination is written, so a record can move into a slot another is leaving. Clearing
+    /// first also keeps a page's occupied-slot count from rising past where it started, so moves
+    /// within a page don't pay MIP-8's 17,000 gas state-growth charge.
+    function _relocate(uint256 dir, uint256 stride, Move[] memory moves) private {
+        uint256 words = stride - 1;
+        uint256[] memory data = new uint256[](moves.length * words);
+
+        for (uint256 i; i < moves.length; ++i) {
+            Move memory m = moves[i];
+
+            uint256 from = _dataSlot(dir, stride, m.id, m.from);
+            if (m.from != AT_HOME) _store(from - 1, 0);
+
+            // Zero words are skipped: there is nothing to clear and nothing to copy.
+            for (uint256 w; w < words; ++w) {
+                uint256 value = _load(from + w);
+
+                if (value != 0) {
+                    data[i * words + w] = value;
+                    _store(from + w, 0);
+                }
+            }
+        }
+
+        for (uint256 i; i < moves.length; ++i) {
+            Move memory m = moves[i];
+
+            uint256 to = _dataSlot(dir, stride, m.id, m.to);
+            if (m.to != AT_HOME) _store(to - 1, m.id);
+
+            for (uint256 w; w < words; ++w) {
+                uint256 value = data[i * words + w];
+                if (value != 0) _store(to + w, value);
+            }
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -267,6 +351,15 @@ library PagePack {
     /// Page-aligned, so a record of up to 128 words never straddles two pages.
     function _home(uint256 id) private pure returns (uint256) {
         return id & ~(PAGE_SIZE - 1);
+    }
+
+    /// The first data word of a record at packed `index`, or at home.
+    function _dataSlot(uint256 dir, uint256 stride, uint256 id, uint256 index)
+        private
+        pure
+        returns (uint256)
+    {
+        return index == AT_HOME ? _home(id) : _packedSlot(dir, stride, index) + 1;
     }
 
     /// Records never straddle pages: each page holds floor(128 / stride) whole records and the
@@ -301,7 +394,11 @@ library PagePack {
     ///
     /// This is the hot path for every lookup without a hint, hence the assembly: in checked
     /// Solidity the arithmetic cost several times the storage reads.
-    function _search(uint256 dir, uint256 id) private view returns (bool found, uint256 index) {
+    function _search(uint256 dir, uint256 id)
+        private
+        view
+        returns (bool found, uint256 index, uint256 position)
+    {
         assembly ("memory-safe") {
             let fingerprint := shr(FINGERPRINT_SHIFT, id)
             let low := 0
@@ -330,6 +427,7 @@ library PagePack {
                 if eq(midFp, fingerprint) {
                     found := 1
                     index := and(entry, INDEX_MASK)
+                    position := mid
                     break
                 }
 
@@ -346,114 +444,219 @@ library PagePack {
         }
     }
 
-    function _entryAt(uint256 dir, uint256 position) private view returns (uint256) {
-        uint256 word = _load(dir + 1 + position / ENTRIES_PER_SLOT);
-
-        return (word >> ((position % ENTRIES_PER_SLOT) * ENTRY_BITS)) & ENTRY_MASK;
-    }
-
-    function _loadEntries(uint256 dir) private view returns (uint256[] memory entries) {
-        entries = new uint256[](_load(dir));
-
-        for (uint256 i; i < entries.length; ++i) {
-            entries[i] = _entryAt(dir, i);
-        }
-    }
-
-    /// Finds a live packed record in the in-memory directory. Returns its identity slot, or 0 if
-    /// the record is not packed.
-    function _locatePacked(uint256[] memory entries, uint256 dir, uint256 stride, uint256 id)
+    /// A record's packed index and directory position, or AT_HOME if it isn't packed.
+    function _locate(uint256 dir, uint256 stride, uint256 id)
         private
         view
-        returns (uint256 location, uint256 position)
+        returns (uint256 index, uint256 position)
     {
-        uint256 fingerprint = id >> FINGERPRINT_SHIFT;
-        uint256 low;
-        uint256 high = entries.length;
+        bool found;
+        (found, index, position) = _search(dir, id);
 
-        while (low < high) {
-            position = (low + high) >> 1;
-
-            // Removed entries keep their fingerprint bits, so the array stays sorted.
-            uint256 entry = entries[position];
-            uint256 midFingerprint = (entry & ENTRY_MASK) >> INDEX_BITS;
-
-            if (midFingerprint == fingerprint) {
-                if (entry & REMOVED != 0) return (0, 0);
-
-                location = _packedSlot(dir, stride, entry & INDEX_MASK);
-
-                return _load(location) == id ? (location, position) : (0, 0);
-            }
-
-            if (midFingerprint < fingerprint) low = position + 1;
-            else high = position;
-        }
-
-        return (0, 0);
+        if (!found || _load(_packedSlot(dir, stride, index)) != id) return (AT_HOME, 0);
     }
 
-    /// Merges live entries with the newly added ones into a single sorted list. Two records with
-    /// the same fingerprint can't both be packed, because lookups could not tell them apart.
-    function _merge(uint256[] memory entries, uint256[] memory added, uint256 addedCount)
+    function _entry(uint256 id, uint256 index) private pure returns (uint256) {
+        return ((id >> FINGERPRINT_SHIFT) << INDEX_BITS) | index;
+    }
+
+    /// Rewrites the index bits of records that moved between packed slots. Their fingerprints
+    /// don't change, so the directory stays sorted.
+    function _updateIndices(uint256 dir, Move[] memory moves) private {
+        for (uint256 i; i < moves.length; ++i) {
+            Move memory m = moves[i];
+            if (m.from == AT_HOME || m.to == AT_HOME) continue;
+
+            uint256 location = dir + 1 + m.position / ENTRIES_PER_SLOT;
+            uint256 shift = (m.position % ENTRIES_PER_SLOT) * ENTRY_BITS;
+
+            _store(location, (_load(location) & ~(INDEX_MASK << shift)) | (m.to << shift));
+        }
+    }
+
+    /// Rebuilds the directory after records were packed or evicted: evicted records' entries
+    /// are dropped and new ones merged in by fingerprint.
+    function _rebuild(uint256 dir, Move[] memory moves, uint256 evicted, uint256 added) private {
+        uint256 count = _load(dir);
+        uint256 nextCount = count - evicted + added;
+        if (nextCount > MAX_PACKED) revert DirectoryFull();
+
+        (uint256[4] memory removed, uint256[] memory insertions) = _changes(moves, added);
+        uint256[] memory stored = _loadWords(dir, count);
+        uint256[] memory merged = new uint256[]((nextCount + 7) / ENTRIES_PER_SLOT);
+
+        (bool collided, uint256 move, uint256 lastMove) =
+            _merge(stored, count, removed, insertions, merged);
+
+        if (collided) _revertCollision(moves, move, lastMove);
+
+        _writeWords(dir, stored, merged);
+        if (nextCount != count) _store(dir, nextCount);
+    }
+
+    /// The directory positions of evicted records, and the entries of newly packed records in
+    /// fingerprint order.
+    function _changes(Move[] memory moves, uint256 added)
         private
         pure
-        returns (uint256[] memory merged)
+        returns (uint256[4] memory removed, uint256[] memory insertions)
     {
-        _sort(added, 0, addedCount);
+        insertions = new uint256[](added);
+        uint256 inserted;
 
-        merged = new uint256[](entries.length + addedCount);
-        uint256 count;
-        uint256 i;
-        uint256 j;
+        for (uint256 i; i < moves.length; ++i) {
+            Move memory m = moves[i];
 
-        while (i < entries.length || j < addedCount) {
-            uint256 next;
-
-            if (i < entries.length && entries[i] & REMOVED != 0) {
-                ++i;
-                continue;
+            if (m.to == AT_HOME) {
+                _mark(removed, m.position);
+            } else if (m.from == AT_HOME) {
+                // The move's number rides below the entry, so a collision can name its key.
+                insertions[inserted++] = (_entry(m.id, m.to) << ENTRY_BITS) | i;
             }
-
-            if (j == addedCount || (i < entries.length && entries[i] < added[j])) {
-                next = entries[i++];
-            } else {
-                next = added[j++];
-            }
-
-            if (count != 0 && (merged[count - 1] >> INDEX_BITS) == (next >> INDEX_BITS)) {
-                revert FingerprintCollision(next >> INDEX_BITS);
-            }
-
-            merged[count++] = next;
         }
 
-        if (count > MAX_PACKED) revert DirectoryFull();
+        // The sort returns early on sorted input, so a planner can save gas by listing new
+        // records in fingerprint order.
+        LibSort.sort(insertions);
+    }
 
-        assembly ("memory-safe") {
-            mstore(merged, count)
+    /// Kept entries never share a fingerprint, so at least one side of a clash is an insertion.
+    /// The other is ~0 if it was a kept entry.
+    function _revertCollision(Move[] memory moves, uint256 move, uint256 lastMove) private pure {
+        if (move == type(uint256).max) move = lastMove;
+
+        if (lastMove != type(uint256).max && moves[move].id == moves[lastMove].id) {
+            revert DuplicateKey(moves[move].key);
+        }
+
+        revert FingerprintCollision(moves[move].key);
+    }
+
+    /// Writes back only the words that changed, clearing any a shorter directory leaves behind.
+    function _writeWords(uint256 dir, uint256[] memory stored, uint256[] memory merged) private {
+        uint256 words = stored.length > merged.length ? stored.length : merged.length;
+
+        for (uint256 w; w < words; ++w) {
+            uint256 word = w < merged.length ? merged[w] : 0;
+            if (w >= stored.length || stored[w] != word) _store(dir + 1 + w, word);
         }
     }
 
-    /// Writes the directory back, touching only words that changed and clearing any left over
-    /// from a longer previous directory.
-    function _writeEntries(uint256 dir, uint256 oldCount, uint256[] memory entries) private {
-        _store(dir, entries.length);
+    function _loadWords(uint256 dir, uint256 count) private view returns (uint256[] memory words) {
+        words = new uint256[]((count + 7) / ENTRIES_PER_SLOT);
 
-        uint256 longest = entries.length > oldCount ? entries.length : oldCount;
-        uint256 words = (longest + ENTRIES_PER_SLOT - 1) / ENTRIES_PER_SLOT;
+        for (uint256 w; w < words.length; ++w) {
+            words[w] = _load(dir + 1 + w);
+        }
+    }
 
-        for (uint256 w; w < words; ++w) {
-            uint256 word;
+    /// Merges the stored entries, minus removed ones, with the sorted insertions, packing the
+    /// result 8 to a word into `merged`. Two records with the same fingerprint can't both be
+    /// packed, because lookups could not tell them apart, so a clash stops the merge and reports
+    /// the moves behind both entries (~0 for a stored one).
+    ///
+    /// This walks the whole directory, so it is assembly: in Solidity, bounds checks and checked
+    /// arithmetic cost several hundred gas per entry, over a million for a full directory. Most
+    /// stored words hold no change at all, and those are copied 8 entries at a time.
+    function _merge(
+        uint256[] memory stored,
+        uint256 count,
+        uint256[4] memory removed,
+        uint256[] memory insertions,
+        uint256[] memory merged
+    ) private pure returns (bool collided, uint256 move, uint256 lastMove) {
+        assembly ("memory-safe") {
+            let words := add(stored, 0x20)
+            let next := add(insertions, 0x20)
+            let end := add(next, shl(5, mload(insertions)))
+            let out := add(merged, 0x20)
 
-            for (uint256 lane; lane < ENTRIES_PER_SLOT; ++lane) {
-                uint256 position = w * ENTRIES_PER_SLOT + lane;
-                if (position >= entries.length) break;
+            let position := 0
+            let produced := 0
+            let word := 0
+            let lastFingerprint := not(0)
+            lastMove := not(0)
 
-                word |= entries[position] << (lane * ENTRY_BITS);
+            for {} 1 {} {
+                // Fast path: a whole stored word with nothing removed from it, every entry below
+                // the next insertion's fingerprint, and no clash with the entry before it.
+                for {} and(iszero(and(position, 7)), iszero(gt(add(position, 8), count))) {} {
+                    let source := mload(add(words, shl(5, shr(3, position))))
+                    let bits := mload(add(removed, shl(5, shr(8, position))))
+
+                    if and(shr(and(position, 255), bits), 0xff) { break }
+                    if eq(shr(INDEX_BITS, and(source, ENTRY_MASK)), lastFingerprint) { break }
+
+                    // Lane 7 holds the word's largest entry.
+                    let lastInWord := shr(224, source)
+
+                    if lt(next, end) {
+                        let insertion := shr(ENTRY_BITS, mload(next))
+                        if iszero(gt(shr(INDEX_BITS, insertion), shr(INDEX_BITS, lastInWord))) {
+                            break
+                        }
+                    }
+
+                    // The word fills the rest of the output word and spills into the next.
+                    let lanes := shl(5, and(produced, 7))
+                    mstore(add(out, shl(5, shr(3, produced))), or(word, shl(lanes, source)))
+                    word := shr(sub(256, lanes), source)
+
+                    produced := add(produced, 8)
+                    position := add(position, 8)
+                    lastFingerprint := shr(INDEX_BITS, lastInWord)
+                    lastMove := not(0)
+                }
+
+                // Skip removed entries. Positions stay below 1,024, inside the bitmap.
+                for {} lt(position, count) { position := add(position, 1) } {
+                    let bits := mload(add(removed, shl(5, shr(8, position))))
+                    if iszero(and(shr(and(position, 255), bits), 1)) { break }
+                }
+
+                // The next stored entry, or ~0 once they run out, which sorts after everything.
+                let kept := not(0)
+                if lt(position, count) {
+                    let source := mload(add(words, shl(5, shr(3, position))))
+                    kept := and(shr(shl(5, and(position, 7)), source), ENTRY_MASK)
+                }
+
+                let entry := kept
+                move := not(0)
+
+                switch lt(next, end)
+                case 1 {
+                    let insertion := mload(next)
+
+                    if lt(shr(ENTRY_BITS, insertion), kept) {
+                        entry := shr(ENTRY_BITS, insertion)
+                        move := and(insertion, ENTRY_MASK)
+                        next := add(next, 0x20)
+                    }
+                }
+                default { if eq(kept, not(0)) { break } }
+
+                if eq(move, not(0)) { position := add(position, 1) }
+
+                let fingerprint := shr(INDEX_BITS, entry)
+                if eq(fingerprint, lastFingerprint) {
+                    collided := 1
+                    break
+                }
+
+                lastFingerprint := fingerprint
+                lastMove := move
+
+                word := or(word, shl(shl(5, and(produced, 7)), entry))
+                produced := add(produced, 1)
+
+                if iszero(and(produced, 7)) {
+                    mstore(add(out, shl(5, sub(shr(3, produced), 1))), word)
+                    word := 0
+                }
             }
 
-            if (_load(dir + 1 + w) != word) _store(dir + 1 + w, word);
+            if and(produced, 7) { mstore(add(out, shl(5, shr(3, produced))), word) }
         }
     }
 
@@ -461,45 +664,23 @@ library PagePack {
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    /// Copies `count` words to an empty destination and clears the source. Zero words are
-    /// skipped since the destination already holds zero there.
-    ///
-    /// The source is cleared before the destination is written. MIP-8 charges 17,000 gas when a
-    /// page's occupied-slot count reaches a new high within the transaction, so writing first
-    /// would briefly raise the count and pay that charge even when both words share a page.
-    function _move(uint256 from, uint256 to, uint256 count) private {
-        for (uint256 i; i < count; ++i) {
-            uint256 value = _load(from + i);
+    /// Sets bit `index` and reports whether it was already set. Callers keep `index` below 1,024,
+    /// so it always falls inside the four words.
+    function _mark(uint256[4] memory bits, uint256 index) private pure returns (bool wasSet) {
+        assembly ("memory-safe") {
+            let location := add(bits, shl(5, shr(8, index)))
+            let word := mload(location)
+            let bit := shl(and(index, 255), 1)
 
-            if (value != 0) {
-                _store(from + i, 0);
-                _store(to + i, value);
-            }
+            wasSet := iszero(iszero(and(word, bit)))
+            mstore(location, or(word, bit))
         }
     }
 
-    /// In-place quicksort of a[low..high). The middle element is the pivot, so input that is
-    /// already sorted (the common case for a resubmitted layout) stays O(n log n).
-    function _sort(uint256[] memory a, uint256 low, uint256 high) private pure {
-        if (high - low < 2) return;
-
-        uint256 last = high - 1;
-        (a[(low + high) / 2], a[last]) = (a[last], a[(low + high) / 2]);
-
-        uint256 pivot = a[last];
-        uint256 boundary = low;
-
-        for (uint256 i = low; i < last; ++i) {
-            if (a[i] < pivot) {
-                (a[i], a[boundary]) = (a[boundary], a[i]);
-                ++boundary;
-            }
+    function _isMarked(uint256[4] memory bits, uint256 index) private pure returns (bool set) {
+        assembly ("memory-safe") {
+            set := and(shr(and(index, 255), mload(add(bits, shl(5, shr(8, index))))), 1)
         }
-
-        (a[boundary], a[last]) = (a[last], a[boundary]);
-
-        _sort(a, low, boundary);
-        _sort(a, boundary + 1, high);
     }
 
     function _load(uint256 slot_) private view returns (uint256 value) {
