@@ -31,6 +31,11 @@ every market's record on one shared page, and repack when activity shifts.
 else itself. `PackedExchange` answers with pagepack; the benchmark baseline answers with a
 mapping. Both share every line of logic.
 
+**One lookup per record per call.** Without a hint, every pagepack lookup searches the space's
+directory. A call keeps the records of the market it is working in, so a settlement locates the
+market and the taker's position once rather than on every fill, and a re-quote finds a market's
+margin rate without locating it again for each order.
+
 **Reusable order slots.** Each account has 16 order slots. Instead of a new storage entry per
 order, a new order overwrites a slot, and cancelled or filled slots keep a nonzero word. Writing
 over a nonzero word avoids MIP-8's 17,000 gas charge for growing state, so placing an order in a
@@ -74,24 +79,34 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 157,682 | 84,947 (-46%) | 76,574 (-51%) |
-| Re-quote 3 orders, one market | 105,199 | 82,744 (-21%) | 69,039 (-34%) |
-| Taker vs 3 makers | 206,340 | 136,218 (-34%) | 121,716 (-41%) |
-| Taker vs 14 makers | 707,070 | 378,291 (-46%) | 339,191 (-52%) |
+| Re-quote 1 order, maker in 6 markets | 158,865 | 79,196 (-50%) | 76,647 (-52%) |
+| Re-quote 3 orders, one market | 106,141 | 74,033 (-30%) | 66,855 (-37%) |
+| Taker vs 3 makers | 207,067 | 126,535 (-39%) | 118,072 (-43%) |
+| Taker vs 14 makers | 708,083 | 330,183 (-53%) | 319,850 (-55%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 85,866 |
-| New order in a reused slot | 68,866 (-20%) |
+| New order in a never-used slot | 86,572 |
+| New order in a reused slot | 69,572 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.
 - **Settlement** saves on every maker and grows with the batch: each maker's account, order and
   position share a page with other makers'.
-- **Without hints, results depend on the records' fingerprints.** Each directory search takes a
-  varying number of probes, and the exchange looks some records up several times per call. Under
-  four different space names, the 14-maker settlement without hints ranged from 374,236 to
-  440,884 gas. Fully hinted calls never search the directory, so their cost doesn't vary.
+- **Without hints, results depend a little on the records' fingerprints.** A directory search
+  takes one to a few probes depending on the fingerprint it looks for, and a space's name decides
+  every fingerprint. The same 14-maker settlement without hints, under six space names:
+
+  | Space name | pagepack |
+  | --- | ---: |
+  | pagepack.exchange | 330,183 |
+  | pagepack.exchange.1 | 330,839 |
+  | pagepack.exchange.2 | 333,851 |
+  | pagepack.exchange.3 | 329,538 |
+  | pagepack.exchange.4 | 335,612 |
+  | pagepack.exchange.5 | 329,421 |
+
+  Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
   funding records. In the mainnet sample, Perpl's re-quotes touched 16 to 46 pages against this
   model's 4 to 14 (see [MAINNET.md](MAINNET.md)). Whether a real exchange saves more is a

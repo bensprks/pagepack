@@ -126,7 +126,7 @@ TABLES = [
         "title": "Exchange example: taker vs 14 makers without hints, by space name",
         "label": "Space name",
         "columns": [("pagepack", "exchange-space-names")],
-        "compare_to_first_row": True,
+        "percentages": False,
         "rows": [
             "pagepack.exchange",
             "pagepack.exchange.1",

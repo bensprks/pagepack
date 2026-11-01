@@ -15,13 +15,13 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 
 | Records updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 record | 33,556 | 43,126 (+29%) | 34,813 (+4%) |
-| 2 records | 45,321 | 45,930 (+1%) | 36,445 (-20%) |
-| 10 records | 139,537 | 69,210 (-50%) | 49,609 (-64%) |
-| 30 records | 375,029 | 138,956 (-63%) | 82,441 (-78%) |
-| 30 records, 3 pages | 375,065 | 148,356 (-60%) | 104,437 (-72%) |
-| 2 unpacked records | 45,333 | 57,860 (+28%) | – |
-| 2 unpacked records, home-hint space | 45,333 | 57,470 (+27%) | 47,895 (+6%) |
+| 1 record | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
+| 2 records | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
+| 10 records | 139,537 | 66,462 (-52%) | 49,609 (-64%) |
+| 30 records | 375,029 | 124,818 (-67%) | 82,441 (-78%) |
+| 30 records, 3 pages | 375,065 | 144,189 (-62%) | 104,437 (-72%) |
+| 2 unpacked records | 45,333 | 55,828 (+23%) | – |
+| 2 unpacked records, home-hint space | 45,333 | 56,417 (+24%) | 47,895 (+6%) |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-record writes and
@@ -30,8 +30,8 @@ In a space that keeps home flags, a hint brings a record that was never packed w
 mapping entry, at a storage cost described under [Planning layouts](#planning-layouts).
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
-dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
-14 makers 52% less than the same exchange on mappings.
+dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker filling against
+14 makers 55% less than the same exchange on mappings.
 
 ## How it works
 
@@ -300,12 +300,12 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
 
   | Packing from home, 16 records per call | Gas per record |
   | --- | ---: |
-  | 1-word records | 59,241 |
-  | 3-word records | 94,922 |
-  | 8-word records | 186,309 |
-  | 8-word records, 1 word set | 62,997 |
-  | 1-word records, never written | 38,825 |
-  | 1-word records, never written, home-hint space | 59,107 |
+  | 1-word records | 58,470 |
+  | 3-word records | 94,479 |
+  | 8-word records | 185,947 |
+  | 8-word records, 1 word set | 62,635 |
+  | 1-word records, never written | 38,054 |
+  | 1-word records, never written, home-hint space | 58,395 |
 
   Filling a space of 1,016 one-word records takes about 55M gas, so split large migrations into
   transactions sized from the table above; listing new records in fingerprint order also skips a
@@ -317,10 +317,10 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
   | Operation (one-word records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
   | --- | ---: | ---: | ---: |
   | Empty rebalance | 22,861 | 22,861 | 22,861 |
-  | Swap two records | 59,726 | 63,102 | 61,648 |
-  | Move one record | 97,413 | 101,179 | 98,589 |
-  | Evict one record | 93,656 | 161,492 | 230,665 |
-  | Replace one record with another | 114,303 | 178,279 | 250,839 |
+  | Swap two records | 59,436 | 60,025 | 61,184 |
+  | Move one record | 97,658 | 98,247 | 98,264 |
+  | Evict one record | 93,901 | 158,560 | 230,340 |
+  | Replace one record with another | 114,309 | 175,309 | 250,450 |
   | Resubmit the whole layout | 146,866 | 1,008,186 | 1,980,958 |
 
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
