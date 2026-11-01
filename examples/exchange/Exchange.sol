@@ -181,7 +181,7 @@ abstract contract Exchange {
         (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
 
         for (uint256 i; i < updates.length; ++i) {
-            QuoteUpdate calldata u = updates[i];
+            QuoteUpdate memory u = updates[i];
             if (u.slot >= ORDER_SLOTS) revert InvalidSlot(u.slot);
 
             // A live order needs a nonzero price: cancelling keeps only the price, market and side,
