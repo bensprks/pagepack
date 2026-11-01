@@ -51,6 +51,60 @@ contract LibDirectoryTest is Test {
         assertFalse(found);
     }
 
+    /// Fingerprints bunched at one end of the range, as keys ground by an attacker hoping to be
+    /// packed might be, with one more at the other end, defeat interpolation: every guess lands
+    /// a word short. After five rounds the search bisects, so even a full directory takes at most
+    /// 12 probes, and this layout reaches that.
+    function test_searchBisectsSkewedDirectories() public {
+        uint256[5] memory sizes = [uint256(9), 50, 200, 500, 1016];
+        uint256[3] memory steps = [uint256(1), 3, 8];
+        uint256 worst;
+
+        for (uint256 s; s < sizes.length; ++s) {
+            for (uint256 t; t < steps.length; ++t) {
+                for (uint256 side; side < 2; ++side) {
+                    uint256 probes = this.searchSkewedDirectory(sizes[s], steps[t], side == 1);
+                    if (probes > worst) worst = probes;
+                }
+            }
+        }
+
+        assertEq(worst, 12);
+    }
+
+    /// Searches for every entry of a skewed directory and the fingerprint just above each, and
+    /// returns the most probes any search took. External, so that each directory starts with
+    /// fresh memory.
+    function searchSkewedDirectory(uint256 count, uint256 step, bool atTop)
+        external
+        returns (uint256 worst)
+    {
+        uint256[] memory list = _skewedEntries(count, step, atTop);
+
+        // put() merges into existing words, so each directory gets fresh storage.
+        harness = new DirectoryHarness();
+        harness.put(list);
+
+        for (uint256 i; i < list.length; ++i) {
+            uint256 fingerprint = list[i] >> 10;
+            (bool found, uint256 index, uint256 position, uint256 probes) =
+                _countedSearch(fingerprint << 234);
+
+            assertTrue(found);
+            assertEq(index, list[i] & 0x3ff);
+            assertEq(position, i);
+            if (probes > worst) worst = probes;
+
+            // The fingerprint just above, unless it is listed too.
+            if (i + 1 < list.length && list[i + 1] >> 10 == fingerprint + 1) continue;
+            if (fingerprint + 1 == 1 << 22) continue;
+
+            (found,,, probes) = _countedSearch((fingerprint + 1) << 234);
+            assertFalse(found);
+            if (probes > worst) worst = probes;
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // Index updates
     // ------------------------------------------------------------------------------------------
@@ -267,6 +321,37 @@ contract LibDirectoryTest is Test {
         }
 
         return seen > 1;
+    }
+
+    /// `count` entries whose fingerprints are `step` apart, packed against one end of the range,
+    /// plus one at the other end.
+    function _skewedEntries(uint256 count, uint256 step, bool atTop)
+        internal
+        pure
+        returns (uint256[] memory list)
+    {
+        list = new uint256[](count);
+
+        for (uint256 i; i < count; ++i) {
+            uint256 fingerprint;
+
+            if (atTop) fingerprint = i == 0 ? 0 : (1 << 22) - 1 - step * (count - 1 - i);
+            else fingerprint = i == count - 1 ? (1 << 22) - 1 : step * i;
+
+            list[i] = (fingerprint << 10) | (i % 1024);
+        }
+    }
+
+    /// Searches for `id`, also counting the directory words read after the header.
+    function _countedSearch(uint256 id)
+        internal
+        returns (bool found, uint256 index, uint256 position, uint256 probes)
+    {
+        vm.record();
+        (found, index, position) = harness.search(id);
+
+        (bytes32[] memory reads,) = vm.accesses(address(harness));
+        probes = reads.length - 1;
     }
 
     function _randomRemovals(uint256 seed, uint256 length)
