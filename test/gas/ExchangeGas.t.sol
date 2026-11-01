@@ -168,7 +168,7 @@ contract ExchangeGasTest is Test {
     /// The taker buys one lot from each of the first `count` of makers 1-15.
     function _settle(Exchange exchange, uint256 count, bool hinted, string memory group) internal {
         Exchange.Fill[] memory fills = new Exchange.Fill[](count);
-        bytes32[] memory keys = new bytes32[](count * 3 + 2);
+        bytes32[] memory keys = new bytes32[](count * 3 + 4);
 
         for (uint256 i; i < count; ++i) {
             address maker = makers[1 + i];
@@ -180,6 +180,10 @@ contract ExchangeGasTest is Test {
         }
         keys[count * 3] = exchange.marketKey(BOOK);
         keys[count * 3 + 1] = exchange.accountKey(fees);
+
+        // The operator knows the taker too, though its records aren't packed.
+        keys[count * 3 + 2] = exchange.accountKey(taker);
+        keys[count * 3 + 3] = exchange.positionKey(taker, BOOK);
 
         PagePack.Hint[] memory hints = hinted ? _hints(keys) : _none();
         _coolIfHinted(exchange, hinted);
