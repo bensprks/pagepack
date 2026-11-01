@@ -1,3 +1,4 @@
 forge-std/=lib/forge-std/src/
 pagepack/=src/
 @openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+solady/=lib/solady/src/
