@@ -123,6 +123,20 @@ TABLES = [
         ],
     },
     {
+        "title": "Exchange example: taker vs 14 makers without hints, by space name",
+        "label": "Space name",
+        "columns": [("pagepack", "exchange-space-names")],
+        "compare_to_first_row": True,
+        "rows": [
+            "pagepack.exchange",
+            "pagepack.exchange.1",
+            "pagepack.exchange.2",
+            "pagepack.exchange.3",
+            "pagepack.exchange.4",
+            "pagepack.exchange.5",
+        ],
+    },
+    {
         "title": "Exchange example: order slot reuse",
         "label": "Operation",
         "columns": [("Mappings", "exchange-slots")],
