@@ -15,17 +15,19 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 
 | Records updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 record | 33,556 | 43,166 (+29%) | 34,813 (+4%) |
-| 2 records | 45,321 | 46,010 (+2%) | 36,445 (-20%) |
-| 10 records | 139,537 | 69,610 (-50%) | 49,609 (-64%) |
-| 30 records | 375,029 | 140,156 (-63%) | 82,441 (-78%) |
-| 30 records, 3 pages | 375,065 | 149,556 (-60%) | 104,437 (-72%) |
-| 2 unpacked records | 45,333 | 57,940 (+28%) | 47,821 (+5%) |
+| 1 record | 33,556 | 43,126 (+29%) | 34,813 (+4%) |
+| 2 records | 45,321 | 45,930 (+1%) | 36,445 (-20%) |
+| 10 records | 139,537 | 69,210 (-50%) | 49,609 (-64%) |
+| 30 records | 375,029 | 138,956 (-63%) | 82,441 (-78%) |
+| 30 records, 3 pages | 375,065 | 148,356 (-60%) | 104,437 (-72%) |
+| 2 unpacked records | 45,333 | 57,860 (+28%) | – |
+| 2 unpacked records, home-hint space | 45,333 | 57,470 (+27%) | 47,895 (+6%) |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-record writes and
 records that were never packed cost more than a mapping, because finding a record costs gas too.
-With a hint, a record that was never packed costs within 5% of a mapping entry.
+In a space that keeps home flags, a hint brings a record that was never packed within 6% of a
+mapping entry, at a storage cost described under [Planning layouts](#planning-layouts).
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
 dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
@@ -47,15 +49,15 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 
   home pages: one per record at keccak256(space, key), like a mapping entry
   ┌──────┬──────────────────────────────────────┬──────┐
-  │ data │ unused                               │ flag │   the record's data until it is
-  └──────┴──────────────────────────────────────┴──────┘   packed; the flag is set while packed
+  │ data │ unused                               │ flag │   data until the record is packed;
+  └──────┴──────────────────────────────────────┴──────┘   flag while packed (home-hint spaces)
 ```
 
 - **Spaces.** A space is a family of fixed-width records (say, one-word balances). Records only
   share pages with records in the same space, so put entities used together in one space.
 - **Home and packed locations.** Every record starts on its home page, derived from its key. An
   admin calls `rebalance` to move hot records into numbered slots on packed pages. A record is
-  never split across pages, and while it is packed, a flag on its home page says so.
+  never split across pages. In a home-hint space, a flag on the home page marks it as packed.
 - **Identity words.** Each packed record is stored with its identity, `keccak256(space, key)`,
   so any lookup can confirm it found the right record. Stale data can't be returned.
 - **Directory.** One page per space lists a 22-bit fingerprint and packed index for up to 1,016
@@ -93,12 +95,12 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 ```
 
 `find(key)` checks a hint first if there is one. A packed record's hint is its index plus one,
-checked against the identity word. A record that isn't packed has the hint `HOME`, checked
-against its packed flag, so it costs what a mapping entry does. Without a hint, or with a wrong
-one, the lookup searches the directory, loading that page once per transaction. Every path ends
-at an identity word or the flag, so a wrong or stale hint can cost gas but never returns the
-wrong record. Load a batch's hints once with `useHints` and every `find` in the transaction uses
-them.
+checked against the identity word. In a home-hint space, a record that isn't packed has the hint
+`HOME`, checked against its packed flag, so it costs what a mapping entry does; other spaces
+ignore `HOME`. Without a hint, or with a wrong one, the lookup searches the directory, loading
+that page once per transaction. Every path ends at an identity word or the flag, so a wrong or
+stale hint can cost gas but never returns the wrong record. Load a batch's hints once with
+`useHints` and every `find` in the transaction uses them.
 
 ### Rebalancing
 
@@ -168,7 +170,9 @@ contract Vault {
 ```
 
 `BALANCES.hintOf(key)` returns a record's hint, so an off-chain caller can build hints for a
-batch with one `eth_call`. `find(key, hint)` takes one hint directly instead.
+batch with one `eth_call`. `find(key, hint)` takes one hint directly instead. To give records
+that aren't packed a hint too, create the space with `PagePack.spaceWithHomeHints(name, words)`;
+see [Planning layouts](#planning-layouts) for what that costs.
 
 ### Using records safely
 
@@ -197,23 +201,53 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
   packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-word records, 42 two-word or
   32 three-word. Put fields that are used together in one record, and rarely used fields in a
   space of their own.
-- **Schema changes.** A space's location comes from its name and width, so widening a record
-  makes a new space rather than appending to the old one. Moving to it means copying records.
-- **Gas.** Packing a record from home costs about 54,000 gas, most of it MIP-8's charge for two
-  new storage slots (identity and data). Filling a space takes about 55M gas, so split large
-  migrations into transactions of a few hundred records; listing new records in fingerprint
-  order also skips a sort. After that, a rebalance costs what it changes. Swapping two records
-  costs about 60,000 gas at any size. Packing or evicting rebuilds the directory once per call,
-  which grows with the number of packed records:
+- **Schema changes.** A space's location comes from its name, width and mode, so widening a
+  record makes a new space rather than appending to the old one. Moving to it means copying
+  records.
+- **Home hints or compact storage.** A default space empties a record's home page when it packs
+  it. A space made with `spaceWithHomeHints` leaves a flag there instead, so a `HOME` hint can
+  confirm a record isn't packed without loading the directory. Each flag is a live storage word
+  that keeps its home page occupied:
+
+  | 512 nonzero one-word records | Live storage words | Occupied pages |
+  | --- | ---: | ---: |
+  | Mapping | 512 | 512 |
+  | pagepack, all packed | 1,089 | 9 |
+  | pagepack with home hints, all packed | 1,601 | 521 |
+
+  These are logical counts of nonzero slots, not database bytes. Flags pay off when transactions
+  often touch records that aren't packed and would load the directory only for them, like the
+  long-tail takers in the exchange example. They also make evicting cheaper, since the home slot
+  stays occupied. The choice is part of the space, like its width: the two kinds never share
+  storage, so switching means migrating.
+- **Gas.** Packing a record from home costs about 39,000 gas plus 18,000 to 20,000 for each
+  nonzero word it holds, mostly MIP-8's charge for new storage slots. Words that are still zero
+  cost nothing:
+
+  | Packing from home, 16 records per call | Gas per record |
+  | --- | ---: |
+  | 1-word records | 59,241 |
+  | 3-word records | 94,922 |
+  | 8-word records | 186,309 |
+  | 8-word records, 1 word set | 62,997 |
+  | 1-word records, never written | 38,825 |
+  | 1-word records, never written, home-hint space | 59,107 |
+
+  Filling a space of 1,016 one-word records takes about 55M gas, so split large migrations into
+  transactions sized from the table above; listing new records in fingerprint order also skips a
+  sort. After that, a rebalance costs what it changes. Swapping two records costs about 60,000
+  gas at any size. Packing or evicting rebuilds the directory once per call, which grows with the
+  number of packed records. Evicting also pays 17,000 gas for the record's home slot in a default
+  space:
 
   | Operation (one-word records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
   | --- | ---: | ---: | ---: |
   | Empty rebalance | 22,861 | 22,861 | 22,861 |
-  | Swap two records | 59,670 | 63,046 | 61,592 |
-  | Move one record | 97,369 | 101,135 | 98,545 |
-  | Evict one record | 77,058 | 144,894 | 214,067 |
-  | Replace one record with another | 98,140 | 162,116 | 234,676 |
-  | Resubmit the whole layout | 146,834 | 1,008,154 | 1,980,926 |
+  | Swap two records | 59,726 | 63,102 | 61,648 |
+  | Move one record | 97,413 | 101,179 | 98,589 |
+  | Evict one record | 93,656 | 161,492 | 230,665 |
+  | Replace one record with another | 114,303 | 178,279 | 250,839 |
+  | Resubmit the whole layout | 146,866 | 1,008,186 | 1,980,958 |
 
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
   cost. Measure that against the current layout, not against mappings: moving a record that
