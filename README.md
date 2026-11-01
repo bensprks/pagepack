@@ -15,16 +15,17 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 
 | Records updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 record | 33,556 | 42,996 (+28%) | 34,801 (+4%) |
-| 2 records | 45,321 | 45,670 (+1%) | 36,421 (-20%) |
-| 10 records | 139,537 | 67,910 (-51%) | 49,489 (-65%) |
-| 30 records | 375,029 | 135,056 (-64%) | 82,081 (-78%) |
-| 30 records, 3 pages | 375,065 | 144,456 (-61%) | 104,077 (-72%) |
-| 2 unpacked records | 45,333 | 57,600 (+27%) | – |
+| 1 record | 33,556 | 43,166 (+29%) | 34,813 (+4%) |
+| 2 records | 45,321 | 46,010 (+2%) | 36,445 (-20%) |
+| 10 records | 139,537 | 69,610 (-50%) | 49,609 (-64%) |
+| 30 records | 375,029 | 140,156 (-63%) | 82,441 (-78%) |
+| 30 records, 3 pages | 375,065 | 149,556 (-60%) | 104,437 (-72%) |
+| 2 unpacked records | 45,333 | 57,940 (+28%) | 47,821 (+5%) |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
-settles 1 to 30 accounts every few hundred milliseconds. Single-record writes and records that
-were never packed cost more than a mapping, because finding a record costs gas too.
+settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-record writes and
+records that were never packed cost more than a mapping, because finding a record costs gas too.
+With a hint, a record that was never packed costs within 5% of a mapping entry.
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
 dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
@@ -53,12 +54,15 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
   records. A lookup without a hint loads that page (once per transaction) and searches it. The
   fingerprints are evenly spread hash bits, so interpolation search finds most entries in about
   three probes.
-- **Hints.** A caller that knows the layout passes a record's packed index. It is checked
-  against the identity word, so the directory is skipped entirely. Wrong or stale hints fall back
-  to the directory: they can cost gas but never return the wrong record.
+- **Hints.** A caller that knows the layout can skip the directory. A packed record's hint is
+  its index plus one, checked against the identity word. A record that isn't packed has the hint
+  `HOME`, checked against a flag on its home page, so it costs what a mapping entry does. Load a
+  batch's hints once with `useHints` and every `find` in the transaction uses them. Wrong or
+  stale hints fall back to the directory: they can cost gas but never return the wrong record.
 - **Rebalancing.** The layout is chosen off-chain from observed activity (see `analysis/`) and
-  applied with `rebalance`, which moves records and rewrites the directory in one transaction.
-  The library has no access control; the contract using it decides who can call it.
+  applied with `rebalance(evictions, placements)`. A call names only the records that change and
+  says where each ends up. It applies as one step, so order doesn't matter and swaps work. The
+  library has no access control; the contract using it decides who can call it.
 
 ## Usage
 
@@ -73,19 +77,25 @@ remapping points `pagepack/` at the repository root rather than `src/`, and the 
 pagepack/=lib/pagepack/src/
 ```
 
+pagepack sorts with Solady's `LibSort`. Foundry finds the copy installed with pagepack on its
+own, or uses your project's if it already has Solady.
+
 ```solidity
 import {PagePack, Record, Space} from "pagepack/PagePack.sol";
 
-contract Ledger {
-    Space internal immutable BALANCES = PagePack.space("ledger.balances", 1);
+contract Vault {
+    Space internal immutable BALANCES = PagePack.space("vault.balances", 1);
 
     function balanceOf(address owner, uint256 id) external view returns (uint256) {
         return BALANCES.find(_key(owner, id)).read(0);
     }
 
-    function settle(Debit[] calldata debits, uint256[] calldata hints) external {
+    /// Hints are optional. Loaded once, they serve every lookup in the transaction.
+    function settle(Debit[] calldata debits, PagePack.Hint[] calldata hints) external {
+        BALANCES.useHints(hints);
+
         for (uint256 i; i < debits.length; ++i) {
-            Record r = BALANCES.find(_key(debits[i].owner, debits[i].id), hints[i]);
+            Record r = BALANCES.find(_key(debits[i].owner, debits[i].id));
             r.write(0, r.read(0) - debits[i].amount);
         }
     }
@@ -100,7 +110,7 @@ contract Ledger {
 ```
 
 `BALANCES.hintOf(key)` returns a record's hint, so an off-chain caller can build hints for a
-batch with one `eth_call`.
+batch with one `eth_call`. `find(key, hint)` takes one hint directly instead.
 
 ### Using records safely
 
@@ -115,12 +125,48 @@ A `Record` is a raw storage pointer, so a few rules keep it safe:
   contents at slots derived from the record's location, so a move would leave them behind. Keep
   them in their own storage, keyed by the record's key.
 
+## Planning layouts
+
+pagepack applies layouts; choosing them happens off-chain. What a planner needs to know:
+
+- **Capacity.** A space packs up to 1,016 records, at indices below 1,024. The rest stay at home
+  and cost what a mapping entry does.
+- **Fingerprint collisions.** The directory knows records by a 22-bit fingerprint, so two records
+  with the same one can't both be packed. Among 1,016 random keys there's an 11.6% chance some
+  pair collides (3.1% at 512, 0.1% at 100). Check new placements with `fingerprintOf` and leave
+  one of each pair at home; otherwise `rebalance` reverts with `FingerprintCollision(key)`.
+- **Record width.** All records in a space have the same width, plus one identity word each when
+  packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-word records, 42 two-word or
+  32 three-word. Put fields that are used together in one record, and rarely used fields in a
+  space of their own.
+- **Schema changes.** A space's location comes from its name and width, so widening a record
+  makes a new space rather than appending to the old one. Moving to it means copying records.
+- **Gas.** Packing a record from home costs about 54,000 gas, most of it MIP-8's charge for two
+  new storage slots (identity and data). Filling a space takes about 55M gas, so split large
+  migrations into transactions of a few hundred records; listing new records in fingerprint
+  order also skips a sort. After that, a rebalance costs what it changes. Swapping two records
+  costs about 60,000 gas at any size. Packing or evicting rebuilds the directory once per call,
+  which grows with the number of packed records:
+
+  | Operation (one-word records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
+  | --- | ---: | ---: | ---: |
+  | Empty rebalance | 22,861 | 22,861 | 22,861 |
+  | Swap two records | 59,646 | 63,022 | 61,568 |
+  | Move one record | 97,357 | 101,123 | 98,533 |
+  | Evict one record | 76,638 | 144,474 | 213,647 |
+  | Replace one record with another | 97,723 | 161,699 | 234,259 |
+  | Resubmit the whole layout | 146,834 | 1,008,154 | 1,980,926 |
+
+- **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
+  cost. Measure that against the current layout, not against mappings: moving a record that
+  already shares a page with the records it is used with saves nothing.
+
 ## Repository
 
 | Path | What's there |
 | --- | --- |
-| `src/` | The library. A single file, `PagePack.sol`, with no dependencies. |
-| `test/` | Unit and fuzz tests, example tests, and `test/gas/` benchmarks. |
+| `src/` | The library. A single file, `PagePack.sol`, whose only dependency is Solady's `LibSort`. |
+| `test/` | Unit, fuzz and invariant tests, example tests, and `test/gas/` benchmarks. |
 | `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |
 
@@ -130,7 +176,7 @@ Requires [Foundry](https://getfoundry.sh). All execution uses Monad's gas schedu
 (`network = "monad"` in `foundry.toml`).
 
 ```bash
-make test   # unit and fuzz tests
+make test   # unit, fuzz and invariant tests
 make gas    # benchmarks and the comparison tables above
 make fmt
 ```

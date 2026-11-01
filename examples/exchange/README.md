@@ -69,15 +69,15 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 159,567 | 87,923 (-45%) | 77,483 (-51%) |
-| Re-quote 3 orders, one market | 108,949 | 89,599 (-18%) | 72,837 (-33%) |
-| Taker vs 3 makers | 205,749 | 143,501 (-30%) | 134,477 (-35%) |
-| Taker vs 14 makers | 703,080 | 413,886 (-41%) | 367,000 (-48%) |
+| Re-quote 1 order, maker in 6 markets | 159,502 | 87,046 (-45%) | 78,157 (-51%) |
+| Re-quote 3 orders, one market | 108,884 | 88,950 (-18%) | 72,625 (-33%) |
+| Taker vs 3 makers | 205,684 | 142,437 (-31%) | 134,158 (-35%) |
+| Taker vs 14 makers | 703,015 | 409,643 (-42%) | 365,713 (-48%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 87,258 |
-| New order in a reused slot | 70,258 (-19%) |
+| New order in a never-used slot | 87,193 |
+| New order in a reused slot | 70,193 (-19%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.
@@ -95,5 +95,6 @@ The admin applies layouts chosen off-chain from recent activity, e.g. daily:
 1. Rank accounts by how often they trade, and markets by how often they are read.
 2. Place each hot account's account, order-slot and position records together, and every market
    record on one page. Records with the same `index / recordsPerPage()` share a page (64 here).
-3. Call `rebalance(evictions, placements)`. Old hints keep working, without the saving, until
-   callers refresh them with `hintOf`.
+3. Call `rebalance(evictions, placements)` with only the records that change. It applies as one
+   step, so a layout can swap records directly. Old hints keep working, without the saving,
+   until callers refresh them with `hintOf`.

@@ -280,6 +280,10 @@ library PagePack {
     ///      doesn't move, two packed records would share a fingerprint, or the directory would
     ///      overflow.
     ///
+    ///      Packing a record from home costs about 54,000 gas, mostly MIP-8's charge for two new
+    ///      slots, so split large layouts across transactions. The sort of newly packed records
+    ///      returns early if the caller lists them in fingerprint order ({fingerprintOf}).
+    ///
     ///      There is no access control here: the calling contract decides who may rebalance.
     function rebalance(Space s, bytes32[] memory evictions, Placement[] memory placements)
         internal
