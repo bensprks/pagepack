@@ -35,6 +35,10 @@ contract RecordStore {
         return SPACE.hintOf(key);
     }
 
+    function fingerprintOf(bytes32 key) external view returns (uint256) {
+        return SPACE.fingerprintOf(key);
+    }
+
     function packedCount() external view returns (uint256) {
         return SPACE.packedCount();
     }

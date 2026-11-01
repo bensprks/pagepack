@@ -80,6 +80,14 @@ contract PagePackTest is Test {
         assertEq(store.get(a, 0), 10);
     }
 
+    function test_fingerprintOfMatchesDirectory() public {
+        (bytes32 a, bytes32 b) = _collidingKeys();
+
+        assertEq(store.fingerprintOf(a), _fingerprint(a));
+        assertEq(store.fingerprintOf(a), store.fingerprintOf(b));
+        assertTrue(store.fingerprintOf(_key(1)) < 1 << 22);
+    }
+
     // ------------------------------------------------------------------------------------------
     // Rebalancing
     // ------------------------------------------------------------------------------------------
