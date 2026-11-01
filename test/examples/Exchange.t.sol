@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {PagePack} from "pagepack/PagePack.sol";
+import {PagePack, Record} from "pagepack/PagePack.sol";
 import {Exchange} from "../../examples/exchange/Exchange.sol";
 import {PackedExchange} from "../../examples/exchange/PackedExchange.sol";
 import {MappingExchange} from "./utils/MappingExchange.sol";
@@ -404,5 +404,50 @@ contract PackedExchangeTest is ExchangeTest {
         assertEq(markPrice, 2_000);
         assertEq(volume, 20);
         assertEq(locked, 30 * 2_000 / 10);
+    }
+}
+
+/// Exposes the exchange's record structs over its own space. Each function writes only a struct's
+/// last field into an empty record and returns the record's last word. When a struct gains a
+/// field, move its probe to the new last field.
+contract ExchangeRecords is PackedExchange {
+    constructor() PackedExchange(IERC20(address(0)), address(0), address(0), address(0)) {}
+
+    function accountLastWord() external returns (uint256) {
+        Record r = RECORDS.find("account");
+        _asAccount(r).markets = 1;
+        return r.read(RECORDS.width() - 1);
+    }
+
+    function positionLastWord() external returns (uint256) {
+        Record r = RECORDS.find("position");
+        _asPosition(r).cost = 1;
+        return r.read(RECORDS.width() - 1);
+    }
+
+    function orderLastWord() external returns (uint256) {
+        Record r = RECORDS.find("order");
+        _asOrder(r).isAsk = true;
+        return r.read(RECORDS.width() - 1);
+    }
+
+    function marketLastWord() external returns (uint256) {
+        Record r = RECORDS.find("market");
+        _asMarket(r).volume = 1;
+        return r.read(RECORDS.width() - 1);
+    }
+}
+
+contract ExchangeRecordsTest is Test {
+    /// A struct must be exactly as wide as its space, and then its last field lands in the
+    /// record's last word. A wider struct puts it past the record, over the next packed record's
+    /// identity word; a narrower one leaves that word empty.
+    function test_recordStructsMatchTheSpaceWidth() public {
+        ExchangeRecords records = new ExchangeRecords();
+
+        assertNotEq(records.accountLastWord(), 0, "Account");
+        assertNotEq(records.positionLastWord(), 0, "Position");
+        assertNotEq(records.orderLastWord(), 0, "Order");
+        assertNotEq(records.marketLastWord(), 0, "Market");
     }
 }
