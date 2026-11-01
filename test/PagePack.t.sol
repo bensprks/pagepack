@@ -463,12 +463,17 @@ contract PagePackTest is Test {
         store.rebalance(_keys(a), _placement(a, 0));
     }
 
+    /// The new entry sorts after the existing one when its index is higher, and before it when
+    /// lower. Both must name b as a collision, not as a duplicate.
     function test_revertsWhenFingerprintsCollide() public {
         (bytes32 a, bytes32 b) = _collidingKeys();
-        _pack(a, 0);
+        _pack(a, 1);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
-        store.rebalance(_noKeys(), _placement(b, 1));
+        store.rebalance(_noKeys(), _placement(b, 2));
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, 0));
     }
 
     function test_invalidWidthReverts() public {
@@ -598,11 +603,15 @@ contract PagePackTest is Test {
             placements[i] = PagePack.Placement(keys[i], i);
         }
 
-        placements[keys.length] = PagePack.Placement(a, keys.length);
+        placements[keys.length] = PagePack.Placement(a, 250);
         store.rebalance(_noKeys(), placements);
 
+        // Above and below a's index.
         vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
-        store.rebalance(_noKeys(), _placement(b, keys.length + 1));
+        store.rebalance(_noKeys(), _placement(b, 251));
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, 201));
     }
 
     function test_revertsWhenDirectoryFull() public {

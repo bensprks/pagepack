@@ -515,15 +515,15 @@ library PagePack {
     }
 
     /// Kept entries never share a fingerprint, so at least one side of a clash is an insertion.
-    /// The other is ~0 if it was a kept entry.
+    /// The other is ~0 if it was a kept entry. Only two insertions can be the same record.
     function _revertCollision(Move[] memory moves, uint256 move, uint256 lastMove) private pure {
-        if (move == type(uint256).max) move = lastMove;
+        uint256 kept = type(uint256).max;
 
-        if (lastMove != type(uint256).max && moves[move].id == moves[lastMove].id) {
+        if (move != kept && lastMove != kept && moves[move].id == moves[lastMove].id) {
             revert DuplicateKey(moves[move].key);
         }
 
-        revert FingerprintCollision(moves[move].key);
+        revert FingerprintCollision(moves[move != kept ? move : lastMove].key);
     }
 
     // ------------------------------------------------------------------------------------------
