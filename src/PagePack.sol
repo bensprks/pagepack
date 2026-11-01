@@ -49,6 +49,11 @@ library PagePack {
         uint256 index;
     }
 
+    struct Hint {
+        bytes32 key;
+        uint256 hint;
+    }
+
     /// A record named in a rebalance: where it is and where it goes. Internal to {rebalance}.
     struct Move {
         bytes32 key;
@@ -137,12 +142,22 @@ library PagePack {
     // Lookups run on every record access, so their arithmetic is unchecked. Widths are at most
     // 127, indices below 1024 and slots come from hashes, so none of it can overflow in practice.
 
-    /// @notice Locates the record for `key`.
+    /// @notice Locates the record for `key`, using a hint from {useHints} if there is one.
     function find(Space s, bytes32 key) internal view returns (Record) {
         unchecked {
             uint256 id = _identity(s, key);
-            uint256 dir = _directory(s);
+            uint256 hint;
 
+            assembly ("memory-safe") {
+                hint := tload(id)
+            }
+
+            if (hint != 0) {
+                uint256 location = _hinted(s, id, hint);
+                if (location != 0) return Record.wrap(location);
+            }
+
+            uint256 dir = _directory(s);
             (bool found, uint256 index,) = _search(dir, id);
 
             if (found) {
@@ -179,12 +194,47 @@ library PagePack {
         }
     }
 
+    /// @notice Remembers hints for the rest of the transaction, so {find} without a hint uses
+    ///         them. Load a batch's hints once at the entry point instead of passing one to every
+    ///         lookup.
+    /// @dev Hints live in transient storage under each record's identity and vanish when the
+    ///      transaction ends. Checking for one costs {find} about 100 gas. Wrong or stale hints
+    ///      are as safe as they are with {find}(key, hint).
+    function useHints(Space s, Hint[] calldata hints) internal {
+        for (uint256 i; i < hints.length; ++i) {
+            useHint(s, hints[i].key, hints[i].hint);
+        }
+    }
+
+    /// @notice Remembers one hint for the rest of the transaction. See {useHints}.
+    function useHint(Space s, bytes32 key, uint256 hint) internal {
+        uint256 id = _identity(s, key);
+
+        assembly ("memory-safe") {
+            tstore(id, hint)
+        }
+    }
+
     /// @notice The hint for `key`: its packed index plus one, or HOME if it is not packed.
     /// @dev Meant to be called off-chain (via an eth_call wrapper) to build hints for a batch.
     function hintOf(Space s, bytes32 key) internal view returns (uint256) {
         (uint256 index,) = _locate(_directory(s), s.width() + 1, _identity(s, key));
 
         return index == AT_HOME ? HOME : index + 1;
+    }
+
+    /// The record's first data word if `hint` is right about where it is, or 0.
+    function _hinted(Space s, uint256 id, uint256 hint) private view returns (uint256) {
+        unchecked {
+            if (hint - 1 < MAX_INDEX) {
+                uint256 location = _packedSlot(_directory(s), s.width() + 1, hint - 1);
+                if (_load(location) == id) return location + 1;
+            } else if (hint == HOME) {
+                if (_load(_packedFlag(id)) == 0) return _home(id);
+            }
+
+            return 0;
+        }
     }
 
     // ------------------------------------------------------------------------------------------
