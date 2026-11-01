@@ -14,13 +14,21 @@ contract PackedExchange is Exchange {
     /// takers are long-tail accounts that are never packed, and with a HOME hint for the taker a
     /// fully hinted settlement never loads the directory. The flags cost one word on the home page
     /// of each packed record, which here means the few hundred records of active accounts.
-    Space internal immutable RECORDS = PagePack.spaceWithHomeHints("pagepack.exchange", 1);
+    Space internal immutable RECORDS;
 
     event Rebalanced(uint256 packedCount);
 
-    constructor(IERC20 collateral_, address admin_, address operator_, address feeRecipient_)
-        Exchange(collateral_, admin_, operator_, feeRecipient_)
-    {}
+    /// @param spaceName Names the space, which decides where its records are stored and so their
+    ///        fingerprints. The benchmarks vary it; any fixed name works.
+    constructor(
+        IERC20 collateral_,
+        address admin_,
+        address operator_,
+        address feeRecipient_,
+        string memory spaceName
+    ) Exchange(collateral_, admin_, operator_, feeRecipient_) {
+        RECORDS = PagePack.spaceWithHomeHints(spaceName, 1);
+    }
 
     /// @notice Applies a new layout. Hints issued before this call may go stale; they still
     ///         resolve correctly, just without the saving.

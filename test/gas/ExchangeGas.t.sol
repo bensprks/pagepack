@@ -47,7 +47,8 @@ contract ExchangeGasTest is Test {
         }
 
         mappingExchange = new MappingExchange(IERC20(address(token)), admin, operator, fees);
-        packedExchange = new PackedExchange(IERC20(address(token)), admin, operator, fees);
+        packedExchange =
+            new PackedExchange(IERC20(address(token)), admin, operator, fees, "pagepack.exchange");
 
         _setUpMarket(mappingExchange);
         _setUpMarket(packedExchange);
