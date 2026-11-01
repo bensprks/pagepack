@@ -160,11 +160,136 @@ contract PagePackTest is Test {
         _assertFilled(b, 20);
     }
 
+    function test_swapsTwoRecords() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(a, 1);
+        placements[1] = PagePack.Placement(b, 0);
+        store.rebalance(_noKeys(), placements);
+
+        assertEq(store.hintOf(a), 2);
+        assertEq(store.hintOf(b), 1);
+        assertEq(store.packedCount(), 2);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
+    /// a leaves for home, b takes a's index, and c comes from home to take b's.
+    function test_cyclesThroughHome() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        bytes32 c = _key(3);
+        _fill(a, 10);
+        _fill(b, 20);
+        _fill(c, 30);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(c, 1);
+        placements[1] = PagePack.Placement(b, 0);
+        store.rebalance(_keys(a), placements);
+
+        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(b), 1);
+        assertEq(store.hintOf(c), 2);
+        assertEq(store.packedCount(), 2);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+        _assertFilled(c, 30);
+    }
+
+    function test_placementOrderDoesNotMatter() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+
+        // b is listed first but takes the index a only leaves later in the list.
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(b, 0);
+        placements[1] = PagePack.Placement(a, 5);
+        store.rebalance(_noKeys(), placements);
+
+        assertEq(store.hintOf(a), 6);
+        assertEq(store.hintOf(b), 1);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
+    function test_emptyRebalanceWritesNothing() public {
+        _pack(_key(1), 0);
+
+        vm.record();
+        store.rebalance(_noKeys(), _noPlacements());
+
+        (bytes32[] memory reads, bytes32[] memory writes) = vm.accesses(address(store));
+        assertEq(reads.length, 0);
+        assertEq(writes.length, 0);
+    }
+
+    function test_resubmittedLayoutWritesNothing() public {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](3);
+
+        for (uint256 i; i < 3; ++i) {
+            _fill(_key(i), 10 * i);
+            placements[i] = PagePack.Placement(_key(i), i * 5);
+        }
+
+        store.rebalance(_noKeys(), placements);
+
+        vm.record();
+        store.rebalance(_noKeys(), placements);
+
+        (, bytes32[] memory writes) = vm.accesses(address(store));
+        assertEq(writes.length, 0);
+    }
+
+    function test_collisionWithEvictedRecordIsAllowed() public {
+        (bytes32 a, bytes32 b) = _collidingKeys();
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+
+        store.rebalance(_keys(a), _placement(b, 1));
+
+        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(b), 2);
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
     function test_revertsWhenIndexTaken() public {
         _pack(_key(1), 0);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 0));
         store.rebalance(_noKeys(), _placement(_key(2), 0));
+    }
+
+    function test_revertsWhenTargetHeldByUnnamedRecord() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _pack(a, 0);
+        _pack(b, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 0));
+        store.rebalance(_noKeys(), _placement(b, 0));
+    }
+
+    function test_revertsWhenTwoPlacementsShareIndex() public {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(_key(1), 3);
+        placements[1] = PagePack.Placement(_key(2), 3);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 3));
+        store.rebalance(_noKeys(), placements);
     }
 
     function test_revertsWhenIndexOutOfRange() public {
@@ -186,6 +311,25 @@ contract PagePackTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, _key(1)));
         store.rebalance(_noKeys(), placements);
+    }
+
+    function test_revertsWhenPackedKeyNamedTwice() public {
+        bytes32 a = _key(1);
+        _pack(a, 0);
+
+        bytes32[] memory twice = new bytes32[](2);
+        twice[0] = a;
+        twice[1] = a;
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(twice, _noPlacements());
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(_keys(a), _placement(a, 5));
+
+        // Also when one mention leaves the record where it is.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(_keys(a), _placement(a, 0));
     }
 
     function test_revertsWhenFingerprintsCollide() public {
@@ -271,6 +415,63 @@ contract PagePackTest is Test {
             assertEq(store.hintOf(keys[i]), keys.length - i);
             assertEq(store.get(keys[i], 0), i + 1);
         }
+    }
+
+    /// Evicts and packs records scattered through a full directory, so the rebuild has to splice
+    /// entries into the middle of words as well as copy whole ones.
+    function test_rebuildsFullDirectory() public {
+        store = new RecordStore(1);
+        bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 3);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](PagePack.MAX_PACKED);
+
+        for (uint256 i; i < keys.length; ++i) {
+            store.set(keys[i], 0, i + 1);
+        }
+
+        for (uint256 i; i < placements.length; ++i) {
+            placements[i] = PagePack.Placement(keys[i], i);
+        }
+
+        store.rebalance(_noKeys(), placements);
+
+        bytes32[] memory evictions = new bytes32[](3);
+        PagePack.Placement[] memory replacements = new PagePack.Placement[](3);
+
+        for (uint256 i; i < 3; ++i) {
+            uint256 victim = 7 + i * 400;
+            evictions[i] = keys[victim];
+            replacements[i] = PagePack.Placement(keys[PagePack.MAX_PACKED + i], victim);
+        }
+
+        store.rebalance(evictions, replacements);
+
+        assertEq(store.packedCount(), PagePack.MAX_PACKED);
+
+        for (uint256 i; i < keys.length; ++i) {
+            // Originals keep index i, except the three evicted ones; replacements take theirs.
+            uint256 hint = i < PagePack.MAX_PACKED ? i + 1 : 8 + (i - PagePack.MAX_PACKED) * 400;
+            if (i >= 7 && i < PagePack.MAX_PACKED && (i - 7) % 400 == 0) hint = 0;
+
+            assertEq(store.hintOf(keys[i]), hint);
+            assertEq(store.get(keys[i], 0), i + 1);
+        }
+    }
+
+    function test_revertsWhenCollisionDeepInDirectory() public {
+        store = new RecordStore(1);
+        (bytes32 a, bytes32 b) = _collidingKeys();
+        bytes32[] memory keys = _uniqueKeys(200);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length + 1);
+
+        for (uint256 i; i < keys.length; ++i) {
+            placements[i] = PagePack.Placement(keys[i], i);
+        }
+
+        placements[keys.length] = PagePack.Placement(a, keys.length);
+        store.rebalance(_noKeys(), placements);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
+        store.rebalance(_noKeys(), _placement(b, keys.length + 1));
     }
 
     function test_revertsWhenDirectoryFull() public {
