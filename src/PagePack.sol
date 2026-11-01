@@ -152,12 +152,16 @@ library PagePack {
                 hint := tload(id)
             }
 
-            if (hint != 0) {
-                uint256 location = _hinted(s, id, hint);
-                if (location != 0) return Record.wrap(location);
+            uint256 dir = _directory(s);
+
+            // The same checks as find(key, hint), repeated here to keep this hot path inline.
+            if (hint - 1 < MAX_INDEX) {
+                uint256 location = _packedSlot(dir, s.width() + 1, hint - 1);
+                if (_load(location) == id) return Record.wrap(location + 1);
+            } else if (hint == HOME) {
+                if (_load(_packedFlag(id)) == 0) return Record.wrap(_home(id));
             }
 
-            uint256 dir = _directory(s);
             (bool found, uint256 index,) = _search(dir, id);
 
             if (found) {
@@ -202,7 +206,12 @@ library PagePack {
     ///      are as safe as they are with {find}(key, hint).
     function useHints(Space s, Hint[] calldata hints) internal {
         for (uint256 i; i < hints.length; ++i) {
-            useHint(s, hints[i].key, hints[i].hint);
+            uint256 id = _identity(s, hints[i].key);
+            uint256 hint = hints[i].hint;
+
+            assembly ("memory-safe") {
+                tstore(id, hint)
+            }
         }
     }
 
@@ -221,20 +230,6 @@ library PagePack {
         (uint256 index,) = _locate(_directory(s), s.width() + 1, _identity(s, key));
 
         return index == AT_HOME ? HOME : index + 1;
-    }
-
-    /// The record's first data word if `hint` is right about where it is, or 0.
-    function _hinted(Space s, uint256 id, uint256 hint) private view returns (uint256) {
-        unchecked {
-            if (hint - 1 < MAX_INDEX) {
-                uint256 location = _packedSlot(_directory(s), s.width() + 1, hint - 1);
-                if (_load(location) == id) return location + 1;
-            } else if (hint == HOME) {
-                if (_load(_packedFlag(id)) == 0) return _home(id);
-            }
-
-            return 0;
-        }
     }
 
     // ------------------------------------------------------------------------------------------
