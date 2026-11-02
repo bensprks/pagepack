@@ -11,19 +11,19 @@ entries that are used together onto shared pages, and the same transaction then 
 
 > Work in progress. Not audited.
 
-## An entry's life
+## Before and after a rebalance
 
-A `PagedMap` behaves like a mapping until it is rebalanced. Take three traders who are often
-settled in the same batch:
+A `PagedMap` behaves like a mapping until it is rebalanced. Take three entries, A, B and C, that
+are often used in the same transaction:
 
 | Step | Mapping | `PagedMap` |
 | --- | --- | --- |
-| Each trader's first write | Lands on its own page, fixed by its key | Lands on its own *home* page, just like a mapping entry |
-| A batch touching all three | 3 page loads | 3 page loads, plus the directory page |
-| The admin calls `rebalance` | Nothing can move | The three are copied side by side onto one *packed* page |
-| Every later batch | Still 3 page loads | 1 page load with hints, 2 without |
-| Usage shifts | Nothing changes | The next rebalance follows it |
-| A new trader signs up | Its own page | Its own home page, until a rebalance packs it |
+| An entry is first written | Lands on its own page, fixed by its key | Lands on its own *home* page, fixed by its key |
+| A transaction uses A, B and C | 3 page loads | 3 page loads, plus the directory page |
+| `rebalance` groups A, B and C | A mapping can't move entries | They move side by side onto one *packed* page |
+| Every later transaction using them | 3 page loads | 1 page load with hints, 2 without |
+| Usage changes | Nothing changes | The next rebalance regroups |
+| A new key is written | Its own page | Its own home page, until a rebalance packs it |
 
 Nothing moves on its own. An off-chain planner watches which entries are used together, and the
 admin applies its layout ([why](#why-entries-dont-pack-themselves)).
@@ -50,7 +50,7 @@ mapping entry, at a [storage cost](docs/reference.md#home-hints-or-compact-stora
 
 What pagepack adds over a well-designed mapping is grouping *across* keys, and regrouping as
 usage changes. A mapping of per-owner structs already keeps one owner's entries on one page;
-pagepack can also put many owners' entries, or every market's, on one page.
+pagepack can also put many owners' entries on one page.
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
 dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
@@ -212,8 +212,8 @@ A hint tells `find` where to look: a packed entry's index plus one, or `HOME` fo
 isn't packed. An off-chain caller gets a batch's hints from `hintOf(key)` in one `eth_call` and
 sends them with the transaction. The contract loads them once with `useHints`, and every lookup in
 the transaction picks them up; `find(key, hint)` takes a single hint directly instead. Callers
-who know the layout, such as a market maker or a settlement operator, pass hints; anyone else
-passes none.
+who know the layout, such as an operator submitting batches, pass hints; anyone else passes
+none.
 
 `HOME` only works in maps made with `PagePack.mapWithHomeHints`, which keep a flag on each packed
 entry's home page. A `HOME` hint then confirms an entry isn't packed by reading its home page
