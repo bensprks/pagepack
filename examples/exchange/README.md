@@ -98,6 +98,10 @@ account; the others quote one market. The taker is a long-tail account and is no
   because its margin check reads a position and a market record for every one of them.
 - **Settlement** saves on every maker and grows with the batch: each maker's account, order and
   position share a page with other makers'.
+- **A better mapping layout would close part of the gap.** A mapping of per-trader structs keeps
+  one trader's account, orders and positions on one page, so the multi-market re-quote would load
+  that page plus one per market record. A settlement would still load a page per maker. pagepack
+  puts many makers' records, and every market's, on a page or two.
 - **Without hints, results depend a little on the records' fingerprints.** A directory search
   takes one to a few probes depending on the fingerprint it looks for, and a map's name decides
   every fingerprint. The same 14-maker settlement without hints, under six map names:
