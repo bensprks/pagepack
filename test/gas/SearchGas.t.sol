@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {DirectoryHarness, randomEntries} from "../utils/DirectoryHarness.sol";
 
 /// Measures the directory search that every lookup without a hint makes, over random
-/// directories of each size: 32 directories, each searched for 32 packed records' fingerprints
-/// and 32 others, as for records at home. Directories differ more than searches within one do,
+/// directories of each size: 32 directories, each searched for 32 packed entries' fingerprints
+/// and 32 others, as for entries at home. Directories differ more than searches within one do,
 /// so the sample spans many. The directory page is already loaded, as it is after a
 /// transaction's first lookup, so a probe costs a 100 gas read plus the comparisons. Gas is
 /// measured around the library call, header read included.
@@ -46,8 +46,8 @@ contract SearchGasTest is Test {
         }
 
         string memory directory = string.concat(vm.toString(size), " packed");
-        _record(string.concat(directory, ", packed record"), packed);
-        _record(string.concat(directory, ", record at home"), home);
+        _record(string.concat(directory, ", packed entry"), packed);
+        _record(string.concat(directory, ", entry at home"), home);
     }
 
     /// Searches one random directory. External, so that each directory starts with fresh memory.

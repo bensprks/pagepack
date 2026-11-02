@@ -5,6 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PagePack} from "pagepack/PagePack.sol";
 import {Exchange} from "../../examples/exchange/Exchange.sol";
+import {
+    accountKey,
+    marketKey,
+    orderKey,
+    positionKey
+} from "../../examples/exchange/ExchangeMap.sol";
 import {PackedExchange} from "../../examples/exchange/PackedExchange.sol";
 import {MappingExchange} from "./utils/MappingExchange.sol";
 import {TestToken} from "./utils/TestToken.sol";
@@ -24,7 +30,7 @@ abstract contract ExchangeTest is Test {
     address internal taker = makeAddr("taker");
 
     event OrderUpdated(
-        address indexed account, uint8 slot, uint8 market, bool isAsk, uint64 price, uint64 size
+        address indexed account, uint8 index, uint8 market, bool isAsk, uint64 price, uint64 size
     );
     event Filled(
         uint8 indexed market,
@@ -136,11 +142,11 @@ abstract contract ExchangeTest is Test {
         _quote(maker, 0, ETH, true, 2_000, 10_000); // locks 2,000,000
     }
 
-    function test_quoteRevertsForUnknownMarketOrSlot() public {
+    function test_quoteRevertsForUnknownMarketOrIndex() public {
         vm.expectRevert(abi.encodeWithSelector(Exchange.UnknownMarket.selector, 9));
         _quote(maker, 0, 9, true, 1, 1);
 
-        vm.expectRevert(abi.encodeWithSelector(Exchange.InvalidSlot.selector, 16));
+        vm.expectRevert(abi.encodeWithSelector(Exchange.InvalidOrderIndex.selector, 16));
         _quote(maker, 16, ETH, true, 1, 1);
     }
 
@@ -280,14 +286,14 @@ abstract contract ExchangeTest is Test {
 
     function _quote(
         address account,
-        uint8 slot,
+        uint8 index,
         uint8 market,
         bool isAsk,
         uint64 price,
         uint64 size
     ) internal {
         Exchange.QuoteUpdate[] memory updates = new Exchange.QuoteUpdate[](1);
-        updates[0] = Exchange.QuoteUpdate(slot, market, isAsk, price, size);
+        updates[0] = Exchange.QuoteUpdate(index, market, isAsk, price, size);
 
         vm.prank(account);
         exchange.requote(updates, _noHints());
@@ -298,13 +304,13 @@ abstract contract ExchangeTest is Test {
         exchange.settle(account, fills, _noHints());
     }
 
-    function _fill(address account, uint8 slot, uint64 size)
+    function _fill(address account, uint8 index, uint64 size)
         internal
         pure
         returns (Exchange.Fill[] memory fills)
     {
         fills = new Exchange.Fill[](1);
-        fills[0] = Exchange.Fill(account, slot, size);
+        fills[0] = Exchange.Fill(account, index, size);
     }
 
     function _noHints() internal pure returns (PagePack.Hint[] memory) {}
@@ -377,11 +383,11 @@ contract PackedExchangeTest is ExchangeTest {
 
     function _makerKeys() internal view returns (bytes32[] memory keys) {
         keys = new bytes32[](5);
-        keys[0] = exchange.accountKey(maker);
-        keys[1] = exchange.orderKey(maker, 0);
-        keys[2] = exchange.positionKey(maker, ETH);
-        keys[3] = exchange.marketKey(ETH);
-        keys[4] = exchange.accountKey(fees);
+        keys[0] = accountKey(maker);
+        keys[1] = orderKey(maker, 0);
+        keys[2] = positionKey(maker, ETH);
+        keys[3] = marketKey(ETH);
+        keys[4] = accountKey(fees);
     }
 
     function _pack(bytes32[] memory keys) internal {
@@ -405,82 +411,5 @@ contract PackedExchangeTest is ExchangeTest {
         assertEq(markPrice, 2_000);
         assertEq(volume, 20);
         assertEq(locked, 30 * 2_000 / 10);
-    }
-}
-
-/// Exposes the width of the exchange's space.
-contract ExchangeRecords is PackedExchange {
-    constructor()
-        PackedExchange(IERC20(address(0)), address(0), address(0), address(0), "pagepack.exchange")
-    {}
-
-    function width() external view returns (uint256) {
-        return RECORDS.width();
-    }
-}
-
-contract ExchangeRecordsTest is Test {
-    /// Each record struct must be exactly as wide as the exchange's space, or writing it would
-    /// run into the next packed record.
-    function test_recordStructsMatchTheSpaceWidth() public {
-        uint256 width = new ExchangeRecords().width();
-
-        assertEq(_accountWords(), width, "Account");
-        assertEq(_positionWords(), width, "Position");
-        assertEq(_orderWords(), width, "Order");
-        assertEq(_marketWords(), width, "Market");
-    }
-
-    // A struct's size in words is how far apart two of them sit in a storage array. These helpers
-    // are `view` only because the compiler treats indexing a storage array as a possible read and
-    // rejects `pure`. Indexing a fixed-size array just computes a slot, so they read and write no
-    // storage.
-
-    function _accountWords() internal view returns (uint256 words) {
-        Exchange.Account[2] storage pair;
-        assembly ("memory-safe") {
-            pair.slot := 0
-        }
-
-        Exchange.Account storage second = pair[1];
-        assembly ("memory-safe") {
-            words := second.slot
-        }
-    }
-
-    function _positionWords() internal view returns (uint256 words) {
-        Exchange.Position[2] storage pair;
-        assembly ("memory-safe") {
-            pair.slot := 0
-        }
-
-        Exchange.Position storage second = pair[1];
-        assembly ("memory-safe") {
-            words := second.slot
-        }
-    }
-
-    function _orderWords() internal view returns (uint256 words) {
-        Exchange.Order[2] storage pair;
-        assembly ("memory-safe") {
-            pair.slot := 0
-        }
-
-        Exchange.Order storage second = pair[1];
-        assembly ("memory-safe") {
-            words := second.slot
-        }
-    }
-
-    function _marketWords() internal view returns (uint256 words) {
-        Exchange.Market[2] storage pair;
-        assembly ("memory-safe") {
-            pair.slot := 0
-        }
-
-        Exchange.Market storage second = pair[1];
-        assembly ("memory-safe") {
-            words := second.slot
-        }
     }
 }

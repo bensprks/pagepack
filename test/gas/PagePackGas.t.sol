@@ -10,11 +10,11 @@ import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 /// the numbers isolate page I/O plus lookup overhead.
 ///
 /// Layout: bench keys 0-29 sit together on one packed page, keys 30-59 are spread over three
-/// pages, keys 60+ are never packed, and 400 filler records give the directory a realistic depth.
-/// A second copy in a home-hint space measures HOME hints for the records that aren't packed.
+/// pages, keys 60+ are never packed, and 400 filler entries give the directory a realistic depth.
+/// A second copy in a home-hint map measures HOME hints for the entries that aren't packed.
 contract PagePackGasTest is Test {
     uint256 internal constant FILLER = 400;
-    uint256 internal constant RECORDS_PER_PAGE = 64;
+    uint256 internal constant ENTRIES_PER_PAGE = 64;
 
     MappingBalances internal mappingBalances;
     PackedBalances internal packedBalances;
@@ -42,11 +42,11 @@ contract PagePackGasTest is Test {
 
         for (uint256 i; i < 30; ++i) {
             uint256 page = 4 + i / 10;
-            placements[30 + i] = PagePack.Placement(_key(30 + i), page * RECORDS_PER_PAGE + i % 10);
+            placements[30 + i] = PagePack.Placement(_key(30 + i), page * ENTRIES_PER_PAGE + i % 10);
         }
 
         for (uint256 i; i < FILLER; ++i) {
-            placements[60 + i] = PagePack.Placement(_filler(i), 7 * RECORDS_PER_PAGE + i);
+            placements[60 + i] = PagePack.Placement(_filler(i), 7 * ENTRIES_PER_PAGE + i);
         }
 
         packedBalances.pack(placements);
@@ -54,95 +54,95 @@ contract PagePackGasTest is Test {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Records packed onto one page
+    // Entries packed onto one page
     // ------------------------------------------------------------------------------------------
 
     function test_gas_mapping_1() public {
-        _bumpMapping("1 record", 0, 1);
+        _bumpMapping("1 entry", 0, 1);
     }
 
     function test_gas_packed_1() public {
-        _bumpPacked("1 record", 0, 1);
+        _bumpPacked("1 entry", 0, 1);
     }
 
     function test_gas_hinted_1() public {
-        _bumpHinted("1 record", 0, 1);
+        _bumpHinted("1 entry", 0, 1);
     }
 
     function test_gas_mapping_2() public {
-        _bumpMapping("2 records", 0, 2);
+        _bumpMapping("2 entries", 0, 2);
     }
 
     function test_gas_packed_2() public {
-        _bumpPacked("2 records", 0, 2);
+        _bumpPacked("2 entries", 0, 2);
     }
 
     function test_gas_hinted_2() public {
-        _bumpHinted("2 records", 0, 2);
+        _bumpHinted("2 entries", 0, 2);
     }
 
     function test_gas_mapping_10() public {
-        _bumpMapping("10 records", 0, 10);
+        _bumpMapping("10 entries", 0, 10);
     }
 
     function test_gas_packed_10() public {
-        _bumpPacked("10 records", 0, 10);
+        _bumpPacked("10 entries", 0, 10);
     }
 
     function test_gas_hinted_10() public {
-        _bumpHinted("10 records", 0, 10);
+        _bumpHinted("10 entries", 0, 10);
     }
 
     function test_gas_mapping_30() public {
-        _bumpMapping("30 records", 0, 30);
+        _bumpMapping("30 entries", 0, 30);
     }
 
     function test_gas_packed_30() public {
-        _bumpPacked("30 records", 0, 30);
+        _bumpPacked("30 entries", 0, 30);
     }
 
     function test_gas_hinted_30() public {
-        _bumpHinted("30 records", 0, 30);
+        _bumpHinted("30 entries", 0, 30);
     }
 
     // ------------------------------------------------------------------------------------------
-    // Records spread over three packed pages
+    // Entries spread over three packed pages
     // ------------------------------------------------------------------------------------------
 
     function test_gas_mapping_30_3pages() public {
-        _bumpMapping("30 records, 3 pages", 30, 30);
+        _bumpMapping("30 entries, 3 pages", 30, 30);
     }
 
     function test_gas_packed_30_3pages() public {
-        _bumpPacked("30 records, 3 pages", 30, 30);
+        _bumpPacked("30 entries, 3 pages", 30, 30);
     }
 
     function test_gas_hinted_30_3pages() public {
-        _bumpHinted("30 records, 3 pages", 30, 30);
+        _bumpHinted("30 entries, 3 pages", 30, 30);
     }
 
     // ------------------------------------------------------------------------------------------
-    // Records that were never packed
+    // Entries that were never packed
     // ------------------------------------------------------------------------------------------
 
     function test_gas_mapping_unpacked_2() public {
-        _bumpMapping("2 unpacked records", 60, 2);
+        _bumpMapping("2 unpacked entries", 60, 2);
     }
 
     function test_gas_packed_unpacked_2() public {
-        _bumpPacked("2 unpacked records", 60, 2);
+        _bumpPacked("2 unpacked entries", 60, 2);
     }
 
     function test_gas_mapping_unpacked_home_2() public {
-        _bumpMapping("2 unpacked records, home-hint space", 60, 2);
+        _bumpMapping("2 unpacked entries, home-hint map", 60, 2);
     }
 
     function test_gas_packed_unpacked_home_2() public {
-        _bumpPacked(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+        _bumpPacked(homeHintBalances, "2 unpacked entries, home-hint map", 60, 2);
     }
 
     function test_gas_hinted_unpacked_home_2() public {
-        _bumpHinted(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+        _bumpHinted(homeHintBalances, "2 unpacked entries, home-hint map", 60, 2);
     }
 
     // ------------------------------------------------------------------------------------------

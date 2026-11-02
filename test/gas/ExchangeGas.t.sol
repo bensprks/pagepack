@@ -5,6 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PagePack} from "pagepack/PagePack.sol";
 import {Exchange} from "../../examples/exchange/Exchange.sol";
+import {
+    accountKey,
+    marketKey,
+    orderKey,
+    positionKey
+} from "../../examples/exchange/ExchangeMap.sol";
 import {PackedExchange} from "../../examples/exchange/PackedExchange.sol";
 import {MappingExchange} from "../examples/utils/MappingExchange.sol";
 import {TestToken} from "../examples/utils/TestToken.sol";
@@ -16,18 +22,18 @@ import {TestToken} from "../examples/utils/TestToken.sol";
 /// markets and 8 resting orders across them. Makers 1-15 each hold a position and 4 asks in
 /// market 1. The taker is a long-tail account and is never packed.
 ///
-/// Packed layout, 64 one-word records per page:
-///   page 0   all 8 market records, the fee account, maker 0 (account, 8 order slots, 6
+/// Packed layout, 64 one-slot entries per page:
+///   page 0   all 8 market entries, the fee account, maker 0 (account, 8 order slots, 6
 ///            positions) and makers 1-6 (account, 4 order slots, 1 position each)
 ///   page 1   makers 7-15
 ///
-/// Each maker's records sit on one page; _pack asserts it.
+/// Each maker's entries sit on one page; _pack asserts it.
 contract ExchangeGasTest is Test {
     uint8 internal constant MARKETS = 8;
     uint8 internal constant BOOK = 1;
     uint256 internal constant MAKERS = 16;
-    uint256 internal constant RECORDS_PER_PAGE = 64;
-    string internal constant SPACE_NAME = "pagepack.exchange";
+    uint256 internal constant ENTRIES_PER_PAGE = 64;
+    string internal constant MAP_NAME = "pagepack.exchange";
 
     address internal admin = makeAddr("admin");
     address internal operator = makeAddr("operator");
@@ -48,7 +54,7 @@ contract ExchangeGasTest is Test {
         }
 
         mappingExchange = new MappingExchange(IERC20(address(token)), admin, operator, fees);
-        packedExchange = _deployPacked(SPACE_NAME);
+        packedExchange = _deployPacked(MAP_NAME);
 
         _setUpMarket(mappingExchange);
         _setUpMarket(packedExchange);
@@ -112,16 +118,15 @@ contract ExchangeGasTest is Test {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Space names
+    // Map names
     // ------------------------------------------------------------------------------------------
 
-    /// A space's name decides every record's fingerprint, and with it how many probes each
+    /// A map's name decides every entry's fingerprint, and with it how many probes each
     /// directory search takes. Settles 14 makers without hints in exchanges that differ only in
-    /// their space's name.
-    function test_gas_settle14_bySpaceName() public {
+    /// their map's name.
+    function test_gas_settle14_byMapName() public {
         for (uint256 i; i < 6; ++i) {
-            string memory name =
-                i == 0 ? SPACE_NAME : string.concat(SPACE_NAME, ".", vm.toString(i));
+            string memory name = i == 0 ? MAP_NAME : string.concat(MAP_NAME, ".", vm.toString(i));
 
             PackedExchange exchange = _deployPacked(name);
             _setUpMarket(exchange);
@@ -129,7 +134,7 @@ contract ExchangeGasTest is Test {
 
             // Setting up warmed the exchange's pages; measure as a fresh transaction.
             vm.cool(address(exchange));
-            _settle(exchange, 14, false, "exchange-space-names", name);
+            _settle(exchange, 14, false, "exchange-map-names", name);
         }
     }
 
@@ -148,9 +153,9 @@ contract ExchangeGasTest is Test {
         _placeInSlot(3, "New order in a reused slot");
     }
 
-    function _placeInSlot(uint8 slot, string memory scenario) internal {
+    function _placeInSlot(uint8 index, string memory scenario) internal {
         Exchange.QuoteUpdate[] memory updates = new Exchange.QuoteUpdate[](1);
-        updates[0] = Exchange.QuoteUpdate(slot, BOOK, true, 2_010, 4);
+        updates[0] = Exchange.QuoteUpdate(index, BOOK, true, 2_010, 4);
 
         vm.prank(makers[2]);
         mappingExchange.requote(updates, _none());
@@ -208,16 +213,16 @@ contract ExchangeGasTest is Test {
             address maker = makers[1 + i];
             fills[i] = Exchange.Fill(maker, 0, 1);
 
-            keys[3 * i] = exchange.accountKey(maker);
-            keys[3 * i + 1] = exchange.orderKey(maker, 0);
-            keys[3 * i + 2] = exchange.positionKey(maker, BOOK);
+            keys[3 * i] = accountKey(maker);
+            keys[3 * i + 1] = orderKey(maker, 0);
+            keys[3 * i + 2] = positionKey(maker, BOOK);
         }
-        keys[count * 3] = exchange.marketKey(BOOK);
-        keys[count * 3 + 1] = exchange.accountKey(fees);
+        keys[count * 3] = marketKey(BOOK);
+        keys[count * 3 + 1] = accountKey(fees);
 
-        // The operator knows the taker too, though its records aren't packed.
-        keys[count * 3 + 2] = exchange.accountKey(taker);
-        keys[count * 3 + 3] = exchange.positionKey(taker, BOOK);
+        // The operator knows the taker too, though its entries aren't packed.
+        keys[count * 3 + 2] = accountKey(taker);
+        keys[count * 3 + 3] = positionKey(taker, BOOK);
 
         PagePack.Hint[] memory hints = hinted ? _hints(keys) : _none();
         _coolIfHinted(exchange, hinted);
@@ -231,7 +236,7 @@ contract ExchangeGasTest is Test {
     // Hints
     // ------------------------------------------------------------------------------------------
 
-    /// Hints for `keys`, as an off-chain caller would build them. Records that aren't packed get
+    /// Hints for `keys`, as an off-chain caller would build them. Entries that aren't packed get
     /// PagePack.HOME.
     function _hints(bytes32[] memory keys) internal view returns (PagePack.Hint[] memory hints) {
         hints = new PagePack.Hint[](keys.length);
@@ -246,23 +251,23 @@ contract ExchangeGasTest is Test {
         if (hinted) vm.cool(address(exchange));
     }
 
-    function _makerKeys(address maker, uint8 slots, uint8 positions)
+    function _makerKeys(address maker, uint8 orders, uint8 positions)
         internal
-        view
+        pure
         returns (bytes32[] memory keys)
     {
-        keys = new bytes32[](1 + slots + 2 * positions);
-        keys[0] = packedExchange.accountKey(maker);
+        keys = new bytes32[](1 + orders + 2 * positions);
+        keys[0] = accountKey(maker);
 
-        for (uint8 i; i < slots; ++i) {
-            keys[1 + i] = packedExchange.orderKey(maker, i);
+        for (uint8 i; i < orders; ++i) {
+            keys[1 + i] = orderKey(maker, i);
         }
 
         // A single-market maker trades in the book market; maker 0 holds markets 0-5.
         for (uint8 i; i < positions; ++i) {
             uint8 market = positions == 1 ? BOOK : i;
-            keys[1 + slots + 2 * i] = packedExchange.positionKey(maker, market);
-            keys[2 + slots + 2 * i] = packedExchange.marketKey(market);
+            keys[1 + orders + 2 * i] = positionKey(maker, market);
+            keys[2 + orders + 2 * i] = marketKey(market);
         }
     }
 
@@ -317,16 +322,16 @@ contract ExchangeGasTest is Test {
         exchange.requote(quotes, _none());
     }
 
-    /// Opens a position for `maker` by resting an ask in `slot` that the seeder (or the taker,
+    /// Opens a position for `maker` by resting an ask at order `index` that the seeder (or the taker,
     /// for the seeder's own ask) takes in full.
-    function _quoteAndHit(Exchange exchange, address maker, uint8 market, uint8 slot) internal {
+    function _quoteAndHit(Exchange exchange, address maker, uint8 market, uint8 index) internal {
         Exchange.QuoteUpdate[] memory quote = new Exchange.QuoteUpdate[](1);
-        quote[0] = Exchange.QuoteUpdate(slot, market, true, 2_000, 2);
+        quote[0] = Exchange.QuoteUpdate(index, market, true, 2_000, 2);
         vm.prank(maker);
         exchange.requote(quote, _none());
 
         Exchange.Fill[] memory fills = new Exchange.Fill[](1);
-        fills[0] = Exchange.Fill(maker, slot, 2);
+        fills[0] = Exchange.Fill(maker, index, 2);
         vm.prank(operator);
         exchange.settle(maker == seeder ? taker : seeder, fills, _none());
     }
@@ -345,15 +350,15 @@ contract ExchangeGasTest is Test {
     }
 
     function _pack(PackedExchange exchange) internal {
-        PagePack.Placement[] memory placements = new PagePack.Placement[](RECORDS_PER_PAGE * 2);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](ENTRIES_PER_PAGE * 2);
         uint256 count;
         uint256 next;
 
         bytes32[] memory shared = new bytes32[](MARKETS + 1);
         for (uint8 m; m < MARKETS; ++m) {
-            shared[m] = exchange.marketKey(m);
+            shared[m] = marketKey(m);
         }
-        shared[MARKETS] = exchange.accountKey(fees);
+        shared[MARKETS] = accountKey(fees);
 
         (count, next) = _placeGroup(placements, count, next, shared);
 
@@ -368,34 +373,34 @@ contract ExchangeGasTest is Test {
         vm.prank(admin);
         exchange.rebalance(new bytes32[](0), placements);
 
-        assertEq(exchange.recordsPerPage(), RECORDS_PER_PAGE);
+        assertEq(exchange.entriesPerPage(), ENTRIES_PER_PAGE);
 
-        // Fixture invariant: each maker's records share one page.
+        // Fixture invariant: each maker's entries share one page.
         for (uint256 i; i < MAKERS; ++i) {
             bytes32[] memory keys = _ownKeys(i);
-            uint256 page = (exchange.hintOf(keys[0]) - 1) / RECORDS_PER_PAGE;
+            uint256 page = (exchange.hintOf(keys[0]) - 1) / ENTRIES_PER_PAGE;
 
             for (uint256 k = 1; k < keys.length; ++k) {
-                assertEq((exchange.hintOf(keys[k]) - 1) / RECORDS_PER_PAGE, page, "split maker");
+                assertEq((exchange.hintOf(keys[k]) - 1) / ENTRIES_PER_PAGE, page, "split maker");
             }
         }
     }
 
-    /// A maker's own records: its account, order slots and positions.
+    /// A maker's own entries: its account, order slots and positions.
     function _ownKeys(uint256 index) internal view returns (bytes32[] memory keys) {
         address maker = makers[index];
-        uint8 slots = index == 0 ? 8 : 4;
+        uint8 orders = index == 0 ? 8 : 4;
         uint8 positions = index == 0 ? 6 : 1;
 
-        keys = new bytes32[](1 + slots + positions);
-        keys[0] = packedExchange.accountKey(maker);
+        keys = new bytes32[](1 + orders + positions);
+        keys[0] = accountKey(maker);
 
-        for (uint8 s; s < slots; ++s) {
-            keys[1 + s] = packedExchange.orderKey(maker, s);
+        for (uint8 s; s < orders; ++s) {
+            keys[1 + s] = orderKey(maker, s);
         }
 
         for (uint8 p; p < positions; ++p) {
-            keys[1 + slots + p] = packedExchange.positionKey(maker, index == 0 ? p : BOOK);
+            keys[1 + orders + p] = positionKey(maker, index == 0 ? p : BOOK);
         }
     }
 
@@ -407,8 +412,8 @@ contract ExchangeGasTest is Test {
         uint256 next,
         bytes32[] memory keys
     ) internal pure returns (uint256, uint256) {
-        uint256 offset = next % RECORDS_PER_PAGE;
-        if (offset + keys.length > RECORDS_PER_PAGE) next += RECORDS_PER_PAGE - offset;
+        uint256 offset = next % ENTRIES_PER_PAGE;
+        if (offset + keys.length > ENTRIES_PER_PAGE) next += ENTRIES_PER_PAGE - offset;
 
         for (uint256 i; i < keys.length; ++i) {
             placements[count++] = PagePack.Placement(keys[i], next++);
