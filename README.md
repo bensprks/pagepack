@@ -3,14 +3,18 @@
 A Solidity library for Monad that moves storage entries used together onto shared pages, so
 transactions that touch many of them cost less.
 
-Monad splits contract storage into pages of 128 slots and charges by page
-([MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md)). The first slot a
-transaction touches on a page costs 8,100 gas; any other slot on the same page costs 100. A
-Solidity mapping hashes each key to an unrelated slot, so every entry ends up on its own page, and
-a transaction that updates 30 balances loads 30 pages.
+**Storage on Monad.** Under [MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md),
+Monad groups each contract's storage into pages of 128 consecutive slots. The first slot a
+transaction touches on a page costs 8,100 gas; every other slot on that page then costs 100.
 
-pagepack's core type, `PagedMap`, works like a mapping, except that an admin can `rebalance` it:
-move the busiest entries side by side onto shared pages. The same update then loads one page.
+**Problem.** A Solidity mapping stores each value at `keccak256(key, slot)`
+([Solidity docs](https://docs.soliditylang.org/en/latest/internals/layout_in_storage.html#mappings-and-dynamic-arrays)),
+so its values land on unrelated slots, almost always on different pages. A transaction that
+updates 30 mapping entries loads 30 pages and pays the 8,100 gas for each.
+
+**Solution.** pagepack's core type, `PagedMap`, works like a mapping, except that an admin can
+`rebalance` it: move entries that are used together side by side onto shared pages. The same 30
+updates then load one page.
 
 ```
   mapping: one entry per page           PagedMap, after a rebalance
