@@ -24,14 +24,23 @@ TOML
 # Keep in sync with the remapping in the README's usage section.
 echo 'pagepack/=lib/pagepack/src/' > "$consumer/remappings.txt"
 
+# The README has users copy the typed map example into their own source.
+cp "$repo/examples/loans/LoanMap.sol" "$consumer/src/"
+
 cat > "$consumer/src/Consumer.sol" <<'SOL'
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
 import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+import {LoanMap, loanMap} from "./LoanMap.sol";
 
 contract Consumer {
+    LoanMap internal immutable LOANS = loanMap("consumer.loans");
     PagedMap internal immutable BALANCES = PagePack.map("consumer.balances", 1);
+
+    function accrue(uint256 loanId, uint128 amount) external {
+        LOANS.find(loanId).interest += amount;
+    }
 
     function balanceOf(bytes32 key) external view returns (uint256) {
         return BALANCES.find(key).read(0);
