@@ -23,8 +23,9 @@ type Space is bytes32;
 /// A Record is a raw storage pointer, and so is a struct laid over one. Nothing checks how they
 /// are used:
 /// - Offsets aren't bounds-checked. Offset `width` is already the next record's identity word,
-///   so a struct must be exactly `width` words. Test each one without touching storage: in a
-///   `T[2] storage` array placed at slot 0, element 1's slot is T's size in words.
+///   so a struct must be exactly `width` words. Test each one: in a `T[2] storage` array placed
+///   at slot 0, element 1's slot is T's size in words. Declare that helper `view`, not `pure`:
+///   the compiler treats indexing a storage array as a possible read, though nothing is read.
 /// - They go stale when the record moves. Look the record up again, and lay the struct over it
 ///   again, after anything in the same transaction that could rebalance, including an external
 ///   call that might re-enter.

@@ -210,7 +210,7 @@ A `Record` is a raw storage pointer, and so is a struct laid over one. A few rul
   offsets must stay below the width: offset `width` is already the next record's identity word.
   Nothing checks either, so test each struct's size. Two elements of a storage array sit exactly
   one struct apart, so the second one's slot is the size, counting arrays, nested structs and any
-  field added later. Indexing the array only computes the slot, so nothing is read or written:
+  field added later:
 
   ```solidity
   function _accountWords() internal view returns (uint256 words) {
@@ -228,8 +228,13 @@ A `Record` is a raw storage pointer, and so is a struct laid over one. A few rul
   // In a test: assertEq(_accountWords(), ACCOUNTS.width());
   ```
 
-  [`test/TypedRecords.t.sol`](test/TypedRecords.t.sol) shows what a wider struct breaks. The
-  exchange's tests run the same check on each of its records.
+  Declare the helper `view`, not `pure`: the compiler treats indexing a storage array as a
+  possible storage read and rejects `pure` (error 2527). The helper still reads and writes no
+  storage, because indexing a fixed-size array only computes a slot.
+
+  [`test/TypedRecords.t.sol`](test/TypedRecords.t.sol) checks that it touches no storage and
+  shows what a wider struct breaks. The exchange's tests run the same check on each of its
+  records.
 - **Look records up again after anything that could rebalance.** A `Record`, and a struct laid
   over one, points wherever the record was when you looked it up. Look it up again after anything
   in the same transaction that could rebalance, including an external call that might re-enter.
