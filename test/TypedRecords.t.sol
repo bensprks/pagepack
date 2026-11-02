@@ -4,27 +4,68 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
 
-/// Typed access to records: a struct exactly as wide as its map, laid over a record's first
-/// slot, so Solidity handles the field offsets and packing.
+/// Three slots: owner and frozen share slot 0, debt fills slot 1, and limit and updatedAt share
+/// slot 2.
+struct Vault {
+    address owner;
+    bool frozen;
+    uint256 debt;
+    uint128 limit;
+    uint64 updatedAt;
+}
+
+/// Four slots, one too many for a three-slot map. Its last field is an array that starts in the
+/// record's last slot and runs one slot past it.
+struct OverfullVault {
+    address owner;
+    uint256 debt;
+    uint256[2] limits;
+}
+
+// A struct's size in slots is how far apart two of them sit in a storage array. These helpers are
+// `view` only because the compiler treats indexing a storage array as a possible read and rejects
+// `pure`. Indexing a fixed-size array just computes a slot, so they read and write no storage.
+
+function vaultSlots() view returns (uint256 slots) {
+    Vault[2] storage pair;
+    assembly ("memory-safe") {
+        pair.slot := 0
+    }
+
+    Vault storage second = pair[1];
+    assembly ("memory-safe") {
+        slots := second.slot
+    }
+}
+
+function overfullVaultSlots() view returns (uint256 slots) {
+    OverfullVault[2] storage pair;
+    assembly ("memory-safe") {
+        pair.slot := 0
+    }
+
+    OverfullVault storage second = pair[1];
+    assembly ("memory-safe") {
+        slots := second.slot
+    }
+}
+
+/// Keeps both structs in one three-slot map and checks each when the map is created, as a map
+/// holding several kinds of record does. OverfullVault doesn't fit, so this never deploys.
+contract OverfullVaults {
+    PagedMap internal immutable VAULTS = _vaults();
+
+    function _vaults() internal view returns (PagedMap vaults) {
+        vaults = PagePack.map("test.vaults", 3);
+
+        vaults.requireFits(vaultSlots());
+        vaults.requireFits(overfullVaultSlots());
+    }
+}
+
+/// Typed access to records: a struct no wider than its map, laid over a record's first slot, so
+/// Solidity handles the field offsets and packing.
 contract TypedRecordsTest is Test {
-    /// Three slots: owner and frozen share slot 0, debt fills slot 1, and limit and updatedAt
-    /// share slot 2.
-    struct Vault {
-        address owner;
-        bool frozen;
-        uint256 debt;
-        uint128 limit;
-        uint64 updatedAt;
-    }
-
-    /// Four slots, one too many for the map. Its last field is an array that starts in the
-    /// record's last slot and runs one slot past it.
-    struct OverfullVault {
-        address owner;
-        uint256 debt;
-        uint256[2] limits;
-    }
-
     PagedMap internal immutable VAULTS = PagePack.map("test.vaults", 3);
 
     bytes32 internal constant KEY = "vault";
@@ -56,20 +97,28 @@ contract TypedRecordsTest is Test {
         assertEq(r.read(2), 1_000 | (7 << 128));
     }
 
-    /// Copy this check for each struct: it must be exactly as wide as its map.
-    function test_structMatchesTheMapWidth() public view {
-        assertEq(_vaultSlots(), VAULTS.width());
+    /// A struct may fill its record or leave part of it unused.
+    function test_structsUpToTheWidthFit() public view {
+        VAULTS.requireFits(vaultSlots());
+        VAULTS.requireFits(1);
     }
 
-    /// The check counts every slot a struct takes, arrays and nested structs included.
-    function test_widthCheckCatchesAWiderStruct() public view {
-        assertEq(_overfullVaultSlots(), VAULTS.width() + 1);
+    /// A map whose width is set by hand checks its structs when it is created, so one that is
+    /// too wide stops the deploy.
+    function test_widerStructStopsTheDeploy() public {
+        vm.expectRevert(abi.encodeWithSelector(PagePack.RecordTooWide.selector, 4, 3));
+        new OverfullVaults();
     }
 
-    /// The check's helpers must be `view`, not `pure`, yet they never touch storage.
-    function test_widthCheckTouchesNoStorage() public {
+    /// The size helper counts every slot a struct takes, arrays and nested structs included.
+    function test_sizeCountsEverySlot() public view {
+        assertEq(overfullVaultSlots(), VAULTS.width() + 1);
+    }
+
+    /// The size helpers must be `view`, not `pure`, yet they never touch storage.
+    function test_sizeHelpersTouchNoStorage() public {
         vm.record();
-        uint256 slots = _vaultSlots();
+        uint256 slots = vaultSlots();
         (bytes32[] memory reads, bytes32[] memory writes) = vm.accesses(address(this));
 
         assertEq(slots, 3);
@@ -103,35 +152,6 @@ contract TypedRecordsTest is Test {
         // The old pointer still names the record's home, which packing cleared.
         assertEq(vault.debt, 0);
         assertEq(_vault(VAULTS.find(KEY)).debt, 500);
-    }
-
-    // A struct's size in slots is how far apart two of them sit in a storage array. These helpers
-    // are `view` only because the compiler treats indexing a storage array as a possible read and
-    // rejects `pure`. Indexing a fixed-size array just computes a slot, so they read and write no
-    // storage.
-
-    function _vaultSlots() internal view returns (uint256 slots) {
-        Vault[2] storage pair;
-        assembly ("memory-safe") {
-            pair.slot := 0
-        }
-
-        Vault storage second = pair[1];
-        assembly ("memory-safe") {
-            slots := second.slot
-        }
-    }
-
-    function _overfullVaultSlots() internal view returns (uint256 slots) {
-        OverfullVault[2] storage pair;
-        assembly ("memory-safe") {
-            pair.slot := 0
-        }
-
-        OverfullVault storage second = pair[1];
-        assembly ("memory-safe") {
-            slots := second.slot
-        }
     }
 
     /// Packs two records side by side, at indices 0 and 1.
