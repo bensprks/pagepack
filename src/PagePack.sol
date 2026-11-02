@@ -23,9 +23,10 @@ type PagedMap is bytes32;
 /// A Record is a raw storage pointer, and so is a struct laid over one. Nothing checks how they
 /// are used:
 /// - Offsets aren't bounds-checked. Offset `width` is already the next record's identity word,
-///   so a struct must be exactly `width` slots. Test each one: in a `T[2] storage` array placed
-///   at slot 0, element 1's slot is T's size in slots. Declare that helper `view`, not `pure`:
-///   the compiler treats indexing a storage array as a possible read, though nothing is read.
+///   so a struct must be at most `width` slots. Take the width from the struct, or check it with
+///   {requireFits}: in a `T[2] storage` array placed at slot 0, element 1's slot is T's size in
+///   slots. Declare that helper `view`, not `pure`: the compiler treats indexing a storage array
+///   as a possible read, though nothing is read.
 /// - They go stale when the record moves. Look the record up again, and lay the struct over it
 ///   again, after anything in the same transaction that could rebalance, including an external
 ///   call that might re-enter.
@@ -87,6 +88,7 @@ library PagePack {
     }
 
     error InvalidWidth(uint256 width);
+    error RecordTooWide(uint256 slots, uint256 width);
     error IndexOutOfRange(uint256 index);
     error IndexTaken(uint256 index);
     error NotPacked(bytes32 key);
@@ -144,6 +146,14 @@ library PagePack {
     /// @notice Number of data slots in each record.
     function width(PagedMap m) internal pure returns (uint256) {
         return uint256(PagedMap.unwrap(m)) & WIDTH_MASK;
+    }
+
+    /// @notice Reverts unless a record of `slots` slots fits within the map's width.
+    /// @dev For a map whose width is set by hand, such as one holding several kinds of record:
+    ///      check each struct's size when creating the map. A narrower struct leaves the rest of
+    ///      its record unused; a wider one would write into the next packed record.
+    function requireFits(PagedMap m, uint256 slots) internal pure {
+        if (slots > m.width()) revert RecordTooWide(slots, m.width());
     }
 
     /// @notice Whether the map keeps home flags, so HOME hints work.
