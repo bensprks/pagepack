@@ -208,16 +208,28 @@ A `Record` is a raw storage pointer, and so is a struct laid over one. A few rul
   own storage, keyed by the record's key.
 - **Match the width.** A struct must be exactly as wide as its space, and `read` and `write`
   offsets must stay below the width: offset `width` is already the next record's identity word.
-  Nothing checks either, so test each struct by writing its last field into an empty record and
-  checking that it reached the record's last word:
+  Nothing checks either, so test each struct's size. Two elements of a storage array sit exactly
+  one struct apart, so the second one's slot is the size, counting arrays, nested structs and any
+  field added later. Indexing the array only computes the slot, so nothing is read or written:
 
   ```solidity
-  _account("probe").updatedAt = 1; // the struct's last field
-  assertNotEq(ACCOUNTS.find("probe").read(ACCOUNTS.width() - 1), 0);
+  function _accountWords() internal view returns (uint256 words) {
+      Account[2] storage pair;
+      assembly ("memory-safe") {
+          pair.slot := 0
+      }
+
+      Account storage second = pair[1];
+      assembly ("memory-safe") {
+          words := second.slot
+      }
+  }
+
+  // In a test: assertEq(_accountWords(), ACCOUNTS.width());
   ```
 
   [`test/TypedRecords.t.sol`](test/TypedRecords.t.sol) shows what a wider struct breaks. The
-  exchange's tests run the same check through a harness contract.
+  exchange's tests run the same check on each of its records.
 - **Look records up again after anything that could rebalance.** A `Record`, and a struct laid
   over one, points wherever the record was when you looked it up. Look it up again after anything
   in the same transaction that could rebalance, including an external call that might re-enter.
