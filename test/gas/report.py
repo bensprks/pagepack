@@ -27,6 +27,7 @@ TABLES = [
             "2 entries",
             "10 entries",
             "30 entries",
+            "64 entries, a full page",
             "30 entries, 3 pages",
             "2 unpacked entries",
             "2 unpacked entries, home-hint map",

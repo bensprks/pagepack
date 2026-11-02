@@ -47,11 +47,12 @@ Updating existing one-slot balances in one transaction, Monad gas schedule, from
 | --- | ---: | ---: | ---: |
 | 1 entry | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
 | 2 entries | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
-| 10 entries | 139,537 | 66,462 (-52%) | 49,609 (-64%) |
-| 30 entries | 375,029 | 124,818 (-67%) | 82,441 (-78%) |
-| 30 entries, 3 pages | 375,065 | 144,189 (-62%) | 104,437 (-72%) |
-| 2 unpacked entries | 45,333 | 55,828 (+23%) | – |
-| 2 unpacked entries, home-hint map | 45,333 | 56,417 (+24%) | 47,895 (+6%) |
+| 10 entries | 139,537 | 67,616 (-52%) | 49,609 (-64%) |
+| 30 entries | 375,029 | 123,085 (-67%) | 82,441 (-78%) |
+| 64 entries, a full page | 775,423 | 215,318 (-72%) | 138,313 (-82%) |
+| 30 entries, 3 pages | 375,029 | 141,802 (-62%) | 104,401 (-72%) |
+| 2 unpacked entries | 45,309 | 56,398 (+24%) | – |
+| 2 unpacked entries, home-hint map | 45,309 | 57,547 (+27%) | 47,871 (+6%) |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-entry writes and
