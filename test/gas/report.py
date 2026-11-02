@@ -18,7 +18,7 @@ TABLES = [
         "title": "Library: updating existing one-slot entries in one transaction",
         "label": "Entries updated",
         "columns": [
-            ("Mapping", "mapping"),
+            ("Regular mapping", "mapping"),
             ("pagepack, no hint", "pagepack"),
             ("pagepack, hinted", "pagepack-hinted"),
         ],
@@ -27,6 +27,7 @@ TABLES = [
             "2 entries",
             "10 entries",
             "30 entries",
+            "64 entries, a full page",
             "30 entries, 3 pages",
             "2 unpacked entries",
             "2 unpacked entries, home-hint map",

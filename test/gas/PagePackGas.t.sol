@@ -9,8 +9,8 @@ import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 /// so every page starts cold. Balances stay nonzero, so no state-growth charges are included:
 /// the numbers isolate page I/O plus lookup overhead.
 ///
-/// Layout: bench keys 0-29 sit together on one packed page, keys 30-59 are spread over three
-/// pages, keys 60+ are never packed, and 400 filler entries give the directory a realistic depth.
+/// Layout: bench keys 0-63 fill one packed page, keys 64-93 are spread over three pages, keys 94+
+/// are never packed, and 400 filler entries give the directory a realistic depth.
 /// A second copy in a home-hint map measures HOME hints for the entries that aren't packed.
 contract PagePackGasTest is Test {
     uint256 internal constant FILLER = 400;
@@ -25,7 +25,7 @@ contract PagePackGasTest is Test {
         packedBalances = new PackedBalances(false);
         homeHintBalances = new PackedBalances(true);
 
-        bytes32[] memory keys = new bytes32[](70);
+        bytes32[] memory keys = new bytes32[](100);
         for (uint256 i; i < keys.length; ++i) {
             keys[i] = _key(i);
         }
@@ -34,19 +34,19 @@ contract PagePackGasTest is Test {
         packedBalances.seed(keys);
         homeHintBalances.seed(keys);
 
-        PagePack.Placement[] memory placements = new PagePack.Placement[](60 + FILLER);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](94 + FILLER);
 
-        for (uint256 i; i < 30; ++i) {
+        for (uint256 i; i < ENTRIES_PER_PAGE; ++i) {
             placements[i] = PagePack.Placement(_key(i), i);
         }
 
         for (uint256 i; i < 30; ++i) {
             uint256 page = 4 + i / 10;
-            placements[30 + i] = PagePack.Placement(_key(30 + i), page * ENTRIES_PER_PAGE + i % 10);
+            placements[64 + i] = PagePack.Placement(_key(64 + i), page * ENTRIES_PER_PAGE + i % 10);
         }
 
         for (uint256 i; i < FILLER; ++i) {
-            placements[60 + i] = PagePack.Placement(_filler(i), 7 * ENTRIES_PER_PAGE + i);
+            placements[94 + i] = PagePack.Placement(_filler(i), 7 * ENTRIES_PER_PAGE + i);
         }
 
         packedBalances.pack(placements);
@@ -105,20 +105,32 @@ contract PagePackGasTest is Test {
         _bumpHinted("30 entries", 0, 30);
     }
 
+    function test_gas_mapping_64() public {
+        _bumpMapping("64 entries, a full page", 0, 64);
+    }
+
+    function test_gas_packed_64() public {
+        _bumpPacked("64 entries, a full page", 0, 64);
+    }
+
+    function test_gas_hinted_64() public {
+        _bumpHinted("64 entries, a full page", 0, 64);
+    }
+
     // ------------------------------------------------------------------------------------------
     // Entries spread over three packed pages
     // ------------------------------------------------------------------------------------------
 
     function test_gas_mapping_30_3pages() public {
-        _bumpMapping("30 entries, 3 pages", 30, 30);
+        _bumpMapping("30 entries, 3 pages", 64, 30);
     }
 
     function test_gas_packed_30_3pages() public {
-        _bumpPacked("30 entries, 3 pages", 30, 30);
+        _bumpPacked("30 entries, 3 pages", 64, 30);
     }
 
     function test_gas_hinted_30_3pages() public {
-        _bumpHinted("30 entries, 3 pages", 30, 30);
+        _bumpHinted("30 entries, 3 pages", 64, 30);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -126,23 +138,23 @@ contract PagePackGasTest is Test {
     // ------------------------------------------------------------------------------------------
 
     function test_gas_mapping_unpacked_2() public {
-        _bumpMapping("2 unpacked entries", 60, 2);
+        _bumpMapping("2 unpacked entries", 94, 2);
     }
 
     function test_gas_packed_unpacked_2() public {
-        _bumpPacked("2 unpacked entries", 60, 2);
+        _bumpPacked("2 unpacked entries", 94, 2);
     }
 
     function test_gas_mapping_unpacked_home_2() public {
-        _bumpMapping("2 unpacked entries, home-hint map", 60, 2);
+        _bumpMapping("2 unpacked entries, home-hint map", 94, 2);
     }
 
     function test_gas_packed_unpacked_home_2() public {
-        _bumpPacked(homeHintBalances, "2 unpacked entries, home-hint map", 60, 2);
+        _bumpPacked(homeHintBalances, "2 unpacked entries, home-hint map", 94, 2);
     }
 
     function test_gas_hinted_unpacked_home_2() public {
-        _bumpHinted(homeHintBalances, "2 unpacked entries, home-hint map", 60, 2);
+        _bumpHinted(homeHintBalances, "2 unpacked entries, home-hint map", 94, 2);
     }
 
     // ------------------------------------------------------------------------------------------

@@ -276,7 +276,7 @@ library PagePack {
 
     /// @notice The hint for `key`: its packed index plus one. An entry that isn't packed has
     ///         HOME in a home-hint map, and 0 (no hint) elsewhere.
-    /// @dev Meant to be called off-chain (via an eth_call wrapper) to build hints for a batch.
+    /// @dev Meant to be called offchain (via an eth_call wrapper) to build hints for a batch.
     function hintOf(PagedMap m, bytes32 key) internal view returns (uint256) {
         (uint256 index,) = _locate(_directory(m), m.width() + 1, _identity(m, key));
 

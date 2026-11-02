@@ -1,6 +1,6 @@
 # analysis
 
-Off-chain tooling that decides which entries to pack together. It is separate from the Solidity
+Offchain tooling that decides which entries to pack together. It is separate from the Solidity
 library: contracts only ever see its output, a list of placements passed to `rebalance`.
 
 > Not built yet. This describes the planned pipeline.

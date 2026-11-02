@@ -10,8 +10,8 @@ import {Account, Market, Order, Position} from "./ExchangeMap.sol";
 /// @title Exchange
 /// @notice The account side of an order-book perpetuals exchange: collateral, positions and
 ///         resting orders, with cross-margin checks. Matching is out of scope. `settle` applies
-///         the fills a match produced, whether that match ran on-chain against a resting book
-///         (like Perpl) or off-chain in an operator's engine.
+///         the fills a match produced, whether that match ran onchain against a resting book
+///         (like Perpl) or offchain in an operator's engine.
 ///
 /// This is a storage benchmark, not a production exchange. It trusts its operator as the
 /// matching and risk engine: see {settle} and the trust assumptions in the README.
