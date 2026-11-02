@@ -31,7 +31,14 @@ library LibDirectory {
     uint256 private constant ENTRIES_PER_SLOT = 8;
 
     // Search rounds that interpolate before falling back to bisection.
-    uint256 private constant INTERPOLATION_ROUNDS = 4;
+    uint256 private constant INTERPOLATION_ROUNDS = 5;
+
+    // For comparing a word's 8 entries at once: a 1 at the bottom of each 64-bit field, and the
+    // low 32 bits of each.
+    uint256 private constant FIELD_ONES =
+        0x0000000000000001000000000000000100000000000000010000000000000001;
+    uint256 private constant FIELD_LOW_HALVES =
+        0x00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff;
 
     /// @notice Number of entries.
     function length(uint256 dir) internal view returns (uint256) {
@@ -55,11 +62,14 @@ library LibDirectory {
     /// @dev The header and entries share a page, so only the first read pays for a page load;
     ///      each further probe is a 100 gas read.
     ///
-    ///      Fingerprints are hash bits, so they are spread evenly and interpolation finds most
-    ///      entries in two or three probes, against ~10 for bisection over a full directory. A
-    ///      skewed set of fingerprints (e.g. ground by an attacker hoping to be packed) can
-    ///      defeat interpolation, so after a few rounds the search falls back to bisection and
-    ///      stays O(log n).
+    ///      Each probe loads a word and compares the fingerprint with all 8 of its entries. The
+    ///      word is chosen by interpolation: fingerprints are hash bits, spread evenly, so the
+    ///      guess usually lands on the right word or next to it, and a miss still rules out
+    ///      everything on one side of the word. Over random directories of up to 1,016 entries
+    ///      a search takes 1.3 to 2 probes on average and almost never more than 4, whether or
+    ///      not the fingerprint is listed. A skewed set of fingerprints (e.g. ground by an
+    ///      attacker hoping to be packed) can defeat interpolation, so after a few rounds the
+    ///      search falls back to bisection, and no search takes more than 12 probes.
     ///
     ///      This is the hot path for every lookup without a hint, hence the assembly: in checked
     ///      Solidity the arithmetic cost several times the storage reads.
@@ -69,11 +79,29 @@ library LibDirectory {
         returns (bool found, uint256 index, uint256 position)
     {
         assembly ("memory-safe") {
+            // How many of the first `lanes` entries in `word` have a fingerprint below
+            // `fingerprint`. Even and odd entries are compared separately, each in the low half
+            // of a 64-bit field, so subtracting one from (fingerprint << 10) + 2^32 - 1 sets bit
+            // 32 of its field exactly when the entry is smaller, without borrowing from the next
+            // field. Entries from `lanes` on are filled with ones, so they never count.
+            function lanesBelow(word, lanes, fingerprint) -> count {
+                word := or(word, shl(shl(5, lanes), not(0)))
+
+                let target := mul(add(shl(INDEX_BITS, fingerprint), ENTRY_MASK), FIELD_ONES)
+                let even := shr(32, sub(target, and(word, FIELD_LOW_HALVES)))
+                let odd := shr(32, sub(target, and(shr(32, word), FIELD_LOW_HALVES)))
+
+                // Multiplying by FIELD_ONES adds up the four fields in the top one.
+                count := shr(192, mul(add(and(even, FIELD_ONES), and(odd, FIELD_ONES)), FIELD_ONES))
+            }
+
             let fingerprint := shr(FINGERPRINT_SHIFT, id)
             let low := 0
             let high := sload(dir)
 
-            // Every fingerprint at positions [low, high) lies in [lowFp, highFp).
+            // Every fingerprint at positions [low, high) lies in [lowFp, highFp). Probes move the
+            // bounds to word boundaries, so a probed word never holds entries below low, and only
+            // the directory's last word can run past high.
             let lowFp := 0
             let highFp := shl(22, 1)
 
@@ -88,27 +116,43 @@ library LibDirectory {
                 }
                 default { mid := shr(1, add(low, high)) }
 
-                // Entry `mid` is lane mid % 8 of directory word mid / 8.
+                // Entry `mid` is in directory word mid / 8, whose entries from `first` to
+                // `first + lanes - 1` are in range.
+                let first := and(mid, not(7))
                 let word := sload(add(add(dir, 1), shr(3, mid)))
-                let entry := and(shr(shl(5, and(mid, 7)), word), ENTRY_MASK)
-                let midFp := shr(INDEX_BITS, entry)
+                let lanes := sub(high, first)
+                if gt(lanes, ENTRIES_PER_SLOT) { lanes := ENTRIES_PER_SLOT }
 
-                if eq(midFp, fingerprint) {
+                // The first entry at or above the fingerprint, if the word has one.
+                let lane := lanesBelow(word, lanes, fingerprint)
+
+                // Above the whole word.
+                if eq(lane, lanes) {
+                    let lastEntry := and(shr(shl(5, sub(lanes, 1)), word), ENTRY_MASK)
+
+                    low := add(first, lanes)
+                    lowFp := add(shr(INDEX_BITS, lastEntry), 1)
+                    continue
+                }
+
+                let entry := and(shr(shl(5, lane), word), ENTRY_MASK)
+                let laneFp := shr(INDEX_BITS, entry)
+
+                if eq(laneFp, fingerprint) {
                     found := 1
                     index := and(entry, INDEX_MASK)
-                    position := mid
+                    position := add(first, lane)
                     break
                 }
 
-                switch lt(midFp, fingerprint)
-                case 1 {
-                    low := add(mid, 1)
-                    lowFp := add(midFp, 1)
+                // Below the whole word, or else between two of its entries and so not listed.
+                if iszero(lane) {
+                    high := first
+                    highFp := laneFp
+                    continue
                 }
-                default {
-                    high := mid
-                    highFp := midFp
-                }
+
+                break
             }
         }
     }

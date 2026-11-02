@@ -318,7 +318,8 @@ contract MappingExchangeTest is ExchangeTest {
 
 contract PackedExchangeTest is ExchangeTest {
     function _deploy() internal override returns (Exchange) {
-        return new PackedExchange(IERC20(address(token)), admin, operator, fees);
+        return
+            new PackedExchange(IERC20(address(token)), admin, operator, fees, "pagepack.exchange");
     }
 
     function _packed() internal view returns (PackedExchange) {
@@ -409,7 +410,9 @@ contract PackedExchangeTest is ExchangeTest {
 
 /// Exposes the width of the exchange's space.
 contract ExchangeRecords is PackedExchange {
-    constructor() PackedExchange(IERC20(address(0)), address(0), address(0), address(0)) {}
+    constructor()
+        PackedExchange(IERC20(address(0)), address(0), address(0), address(0), "pagepack.exchange")
+    {}
 
     function width() external view returns (uint256) {
         return RECORDS.width();

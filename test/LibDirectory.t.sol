@@ -2,66 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {LibDirectory} from "../src/LibDirectory.sol";
 import {LibSort} from "../src/utils/LibSort.sol";
-
-/// Exposes LibDirectory over one directory, and reads and writes it the slow, obvious way.
-contract DirectoryHarness {
-    uint256 public constant DIR = uint256(keccak256("pagepack.test.directory")) & ~uint256(127);
-
-    function search(uint256 id) external view returns (bool, uint256, uint256) {
-        return LibDirectory.search(DIR, id);
-    }
-
-    function setIndex(uint256 position, uint256 index) external {
-        LibDirectory.setIndex(DIR, position, index);
-    }
-
-    function rebuild(uint256[4] memory removed, uint256 removedCount, uint256[] memory insertions)
-        external
-        returns (bool, uint256, uint256)
-    {
-        return LibDirectory.rebuild(DIR, removed, removedCount, insertions);
-    }
-
-    function put(uint256[] memory entries) external {
-        _store(DIR, entries.length);
-
-        for (uint256 i; i < entries.length; ++i) {
-            uint256 location = DIR + 1 + i / 8;
-            _store(location, _load(location) | (entries[i] << (32 * (i % 8))));
-        }
-    }
-
-    function entries() external view returns (uint256[] memory list) {
-        list = new uint256[](_load(DIR));
-
-        for (uint256 i; i < list.length; ++i) {
-            list[i] = (_load(DIR + 1 + i / 8) >> (32 * (i % 8))) & 0xffffffff;
-        }
-    }
-
-    /// The header and all 127 entry words.
-    function words() external view returns (uint256[] memory raw) {
-        raw = new uint256[](128);
-
-        for (uint256 i; i < raw.length; ++i) {
-            raw[i] = _load(DIR + i);
-        }
-    }
-
-    function _load(uint256 slot) internal view returns (uint256 value) {
-        assembly {
-            value := sload(slot)
-        }
-    }
-
-    function _store(uint256 slot, uint256 value) internal {
-        assembly {
-            sstore(slot, value)
-        }
-    }
-}
+import {DirectoryHarness, randomEntries} from "./utils/DirectoryHarness.sol";
 
 /// Checks LibDirectory's assembly against plain Solidity versions of the same operations, over
 /// random directories of up to full size.
@@ -79,7 +21,7 @@ contract LibDirectoryTest is Test {
     // ------------------------------------------------------------------------------------------
 
     function testFuzz_searchFindsEveryEntry(uint256 seed) public {
-        uint256[] memory list = _randomEntries(seed, _random(seed, "size") % 1017);
+        uint256[] memory list = randomEntries(seed, _random(seed, "size") % 1017);
         harness.put(list);
 
         for (uint256 i; i < list.length; ++i) {
@@ -92,7 +34,7 @@ contract LibDirectoryTest is Test {
     }
 
     function testFuzz_searchMissesAbsentFingerprints(uint256 seed) public {
-        uint256[] memory list = _randomEntries(seed, _random(seed, "size") % 1017);
+        uint256[] memory list = randomEntries(seed, _random(seed, "size") % 1017);
         harness.put(list);
 
         for (uint256 i; i < 32; ++i) {
@@ -109,6 +51,60 @@ contract LibDirectoryTest is Test {
         assertFalse(found);
     }
 
+    /// Fingerprints bunched at one end of the range, as keys ground by an attacker hoping to be
+    /// packed might be, with one more at the other end, defeat interpolation: every guess lands
+    /// a word short. After five rounds the search bisects, so even a full directory takes at most
+    /// 12 probes, and this layout reaches that.
+    function test_searchBisectsSkewedDirectories() public {
+        uint256[5] memory sizes = [uint256(9), 50, 200, 500, 1016];
+        uint256[3] memory steps = [uint256(1), 3, 8];
+        uint256 worst;
+
+        for (uint256 s; s < sizes.length; ++s) {
+            for (uint256 t; t < steps.length; ++t) {
+                for (uint256 side; side < 2; ++side) {
+                    uint256 probes = this.searchSkewedDirectory(sizes[s], steps[t], side == 1);
+                    if (probes > worst) worst = probes;
+                }
+            }
+        }
+
+        assertEq(worst, 12);
+    }
+
+    /// Searches for every entry of a skewed directory and the fingerprint just above each, and
+    /// returns the most probes any search took. External, so that each directory starts with
+    /// fresh memory.
+    function searchSkewedDirectory(uint256 count, uint256 step, bool atTop)
+        external
+        returns (uint256 worst)
+    {
+        uint256[] memory list = _skewedEntries(count, step, atTop);
+
+        // put() merges into existing words, so each directory gets fresh storage.
+        harness = new DirectoryHarness();
+        harness.put(list);
+
+        for (uint256 i; i < list.length; ++i) {
+            uint256 fingerprint = list[i] >> 10;
+            (bool found, uint256 index, uint256 position, uint256 probes) =
+                _countedSearch(fingerprint << 234);
+
+            assertTrue(found);
+            assertEq(index, list[i] & 0x3ff);
+            assertEq(position, i);
+            if (probes > worst) worst = probes;
+
+            // The fingerprint just above, unless it is listed too.
+            if (i + 1 < list.length && list[i + 1] >> 10 == fingerprint + 1) continue;
+            if (fingerprint + 1 == 1 << 22) continue;
+
+            (found,,, probes) = _countedSearch((fingerprint + 1) << 234);
+            assertFalse(found);
+            if (probes > worst) worst = probes;
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // Index updates
     // ------------------------------------------------------------------------------------------
@@ -116,7 +112,7 @@ contract LibDirectoryTest is Test {
     function testFuzz_setIndexChangesOneEntry(uint256 seed, uint256 position, uint256 index)
         public
     {
-        uint256[] memory list = _randomEntries(seed, 1 + _random(seed, "size") % 1016);
+        uint256[] memory list = randomEntries(seed, 1 + _random(seed, "size") % 1016);
         harness.put(list);
         position %= list.length;
         index %= 1024;
@@ -134,7 +130,7 @@ contract LibDirectoryTest is Test {
     /// Removes and inserts random entries, sometimes reusing a fingerprint that is already listed,
     /// removed or being inserted, and compares the result with a plain merge.
     function testFuzz_rebuildMatchesReference(uint256 seed) public {
-        uint256[] memory list = _randomEntries(seed, _random(seed, "size") % 1017);
+        uint256[] memory list = randomEntries(seed, _random(seed, "size") % 1017);
         harness.put(list);
 
         (uint256[4] memory removed, bool[] memory isRemoved, uint256 removedCount) =
@@ -191,7 +187,7 @@ contract LibDirectoryTest is Test {
     }
 
     function test_rebuildRemovesEverything() public {
-        uint256[] memory list = _randomEntries(1, 20);
+        uint256[] memory list = randomEntries(1, 20);
         harness.put(list);
 
         uint256[4] memory removed;
@@ -327,9 +323,9 @@ contract LibDirectoryTest is Test {
         return seen > 1;
     }
 
-    /// `count` random entries with distinct fingerprints, sorted. Duplicates are dropped, so a
-    /// few may be missing. Sorting test data with LibSort is fine: it has tests of its own below.
-    function _randomEntries(uint256 seed, uint256 count)
+    /// `count` entries whose fingerprints are `step` apart, packed against one end of the range,
+    /// plus one at the other end.
+    function _skewedEntries(uint256 count, uint256 step, bool atTop)
         internal
         pure
         returns (uint256[] memory list)
@@ -337,20 +333,25 @@ contract LibDirectoryTest is Test {
         list = new uint256[](count);
 
         for (uint256 i; i < count; ++i) {
-            uint256 r = _random(seed, i);
-            list[i] = ((r >> 234) << 10) | (r & 0x3ff);
-        }
+            uint256 fingerprint;
 
-        LibSort.sort(list);
+            if (atTop) fingerprint = i == 0 ? 0 : (1 << 22) - 1 - step * (count - 1 - i);
+            else fingerprint = i == count - 1 ? (1 << 22) - 1 : step * i;
 
-        uint256 unique;
-        for (uint256 i; i < count; ++i) {
-            if (unique == 0 || list[i] >> 10 != list[unique - 1] >> 10) list[unique++] = list[i];
+            list[i] = (fingerprint << 10) | (i % 1024);
         }
+    }
 
-        assembly {
-            mstore(list, unique)
-        }
+    /// Searches for `id`, also counting the directory words read after the header.
+    function _countedSearch(uint256 id)
+        internal
+        returns (bool found, uint256 index, uint256 position, uint256 probes)
+    {
+        vm.record();
+        (found, index, position) = harness.search(id);
+
+        (bytes32[] memory reads,) = vm.accesses(address(harness));
+        probes = reads.length - 1;
     }
 
     function _randomRemovals(uint256 seed, uint256 length)

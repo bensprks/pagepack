@@ -27,6 +27,7 @@ contract ExchangeGasTest is Test {
     uint8 internal constant BOOK = 1;
     uint256 internal constant MAKERS = 16;
     uint256 internal constant RECORDS_PER_PAGE = 64;
+    string internal constant SPACE_NAME = "pagepack.exchange";
 
     address internal admin = makeAddr("admin");
     address internal operator = makeAddr("operator");
@@ -47,11 +48,11 @@ contract ExchangeGasTest is Test {
         }
 
         mappingExchange = new MappingExchange(IERC20(address(token)), admin, operator, fees);
-        packedExchange = new PackedExchange(IERC20(address(token)), admin, operator, fees);
+        packedExchange = _deployPacked(SPACE_NAME);
 
         _setUpMarket(mappingExchange);
         _setUpMarket(packedExchange);
-        _pack();
+        _pack(packedExchange);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -111,6 +112,28 @@ contract ExchangeGasTest is Test {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Space names
+    // ------------------------------------------------------------------------------------------
+
+    /// A space's name decides every record's fingerprint, and with it how many probes each
+    /// directory search takes. Settles 14 makers without hints in exchanges that differ only in
+    /// their space's name.
+    function test_gas_settle14_bySpaceName() public {
+        for (uint256 i; i < 6; ++i) {
+            string memory name =
+                i == 0 ? SPACE_NAME : string.concat(SPACE_NAME, ".", vm.toString(i));
+
+            PackedExchange exchange = _deployPacked(name);
+            _setUpMarket(exchange);
+            _pack(exchange);
+
+            // Setting up warmed the exchange's pages; measure as a fresh transaction.
+            vm.cool(address(exchange));
+            _settle(exchange, 14, false, "exchange-space-names", name);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Order slot reuse
     // ------------------------------------------------------------------------------------------
 
@@ -167,6 +190,17 @@ contract ExchangeGasTest is Test {
 
     /// The taker buys one lot from each of the first `count` of makers 1-15.
     function _settle(Exchange exchange, uint256 count, bool hinted, string memory group) internal {
+        string memory scenario = string.concat("Taker vs ", vm.toString(count), " makers");
+        _settle(exchange, count, hinted, group, scenario);
+    }
+
+    function _settle(
+        Exchange exchange,
+        uint256 count,
+        bool hinted,
+        string memory group,
+        string memory scenario
+    ) internal {
         Exchange.Fill[] memory fills = new Exchange.Fill[](count);
         bytes32[] memory keys = new bytes32[](count * 3 + 4);
 
@@ -190,7 +224,7 @@ contract ExchangeGasTest is Test {
 
         vm.prank(operator);
         exchange.settle(taker, fills, hints);
-        vm.snapshotGasLastCall(group, string.concat("Taker vs ", vm.toString(count), " makers"));
+        vm.snapshotGasLastCall(group, scenario);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -297,6 +331,10 @@ contract ExchangeGasTest is Test {
         exchange.settle(maker == seeder ? taker : seeder, fills, _none());
     }
 
+    function _deployPacked(string memory name) internal returns (PackedExchange) {
+        return new PackedExchange(IERC20(address(token)), admin, operator, fees, name);
+    }
+
     function _fund(Exchange exchange, address account) internal {
         token.mint(account, 1e12);
 
@@ -306,16 +344,16 @@ contract ExchangeGasTest is Test {
         vm.stopPrank();
     }
 
-    function _pack() internal {
+    function _pack(PackedExchange exchange) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](RECORDS_PER_PAGE * 2);
         uint256 count;
         uint256 next;
 
         bytes32[] memory shared = new bytes32[](MARKETS + 1);
         for (uint8 m; m < MARKETS; ++m) {
-            shared[m] = packedExchange.marketKey(m);
+            shared[m] = exchange.marketKey(m);
         }
-        shared[MARKETS] = packedExchange.accountKey(fees);
+        shared[MARKETS] = exchange.accountKey(fees);
 
         (count, next) = _placeGroup(placements, count, next, shared);
 
@@ -328,19 +366,17 @@ contract ExchangeGasTest is Test {
         }
 
         vm.prank(admin);
-        packedExchange.rebalance(new bytes32[](0), placements);
+        exchange.rebalance(new bytes32[](0), placements);
 
-        assertEq(packedExchange.recordsPerPage(), RECORDS_PER_PAGE);
+        assertEq(exchange.recordsPerPage(), RECORDS_PER_PAGE);
 
         // Fixture invariant: each maker's records share one page.
         for (uint256 i; i < MAKERS; ++i) {
             bytes32[] memory keys = _ownKeys(i);
-            uint256 page = (packedExchange.hintOf(keys[0]) - 1) / RECORDS_PER_PAGE;
+            uint256 page = (exchange.hintOf(keys[0]) - 1) / RECORDS_PER_PAGE;
 
             for (uint256 k = 1; k < keys.length; ++k) {
-                assertEq(
-                    (packedExchange.hintOf(keys[k]) - 1) / RECORDS_PER_PAGE, page, "split maker"
-                );
+                assertEq((exchange.hintOf(keys[k]) - 1) / RECORDS_PER_PAGE, page, "split maker");
             }
         }
     }

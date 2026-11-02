@@ -179,7 +179,7 @@ abstract contract Exchange {
         balance -= amount;
 
         account.balance = uint128(balance);
-        _requireMargin(msg.sender, int256(balance), locked, markets);
+        _requireMargin(_newLocated(msg.sender), int256(balance), locked, markets);
 
         collateral.safeTransfer(msg.sender, amount);
         emit Withdrawn(msg.sender, amount);
@@ -200,6 +200,7 @@ abstract contract Exchange {
         Account storage account = _asAccount(_locate(accountKey(msg.sender)));
         (uint256 balance, uint256 locked, uint256 markets) =
             (account.balance, account.locked, account.markets);
+        Located memory located = _newLocated(msg.sender);
 
         for (uint256 i; i < updates.length; ++i) {
             QuoteUpdate memory u = updates[i];
@@ -210,8 +211,8 @@ abstract contract Exchange {
             if (u.size != 0 && u.price == 0) revert InvalidPrice();
 
             Order storage order = _asOrder(_locate(orderKey(msg.sender, u.slot)));
-            locked = locked - _orderMargin(order.price, order.size, order.market)
-                + _orderMargin(u.price, u.size, u.market);
+            locked = locked - _orderMargin(located, order.price, order.size, order.market)
+                + _orderMargin(located, u.price, u.size, u.market);
 
             if (u.size == 0) {
                 order.size = 0;
@@ -226,7 +227,7 @@ abstract contract Exchange {
         }
 
         account.locked = locked.toUint64();
-        _requireMargin(msg.sender, int256(balance), locked, markets);
+        _requireMargin(located, int256(balance), locked, markets);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -252,7 +253,8 @@ abstract contract Exchange {
             (account.balance, account.locked, account.markets);
 
         // The taker's account is written once after the whole batch rather than once per fill.
-        (int256 realized, uint256 fees, uint256 newMarkets) = _settleFills(taker, fills, markets);
+        Located memory located = _newLocated(taker);
+        (int256 realized, uint256 fees, uint256 newMarkets) = _settleFills(located, fills, markets);
 
         int256 cash = int256(balance) + realized - int256(fees);
         if (cash < 0) revert InsufficientBalance(taker);
@@ -261,7 +263,7 @@ abstract contract Exchange {
         account.markets = uint64(newMarkets);
         _credit(feeRecipient, fees);
 
-        _requireMargin(taker, cash, locked, newMarkets);
+        _requireMargin(located, cash, locked, newMarkets);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -376,10 +378,59 @@ abstract contract Exchange {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Records located once per call
+    // ------------------------------------------------------------------------------------------
+
+    /// The market a call is working in, with its record and `account`'s position there, each zero
+    /// until located. Without a hint every lookup searches pagepack's directory, and a call can
+    /// need these many times: a settlement updates the market and the taker's position on every
+    /// fill, and a re-quote reads the market's margin rate for each order. Fills and quote
+    /// updates nearly always share a market, so keeping one market's records saves most repeat
+    /// lookups. `account` is the caller in a re-quote or withdrawal, and the taker in a
+    /// settlement. Like the struct pointers, these are never held across the collateral
+    /// transfers.
+    struct Located {
+        address account;
+        uint8 market;
+        Record record;
+        Record position;
+    }
+
+    function _newLocated(address account) private pure returns (Located memory located) {
+        located.account = account;
+    }
+
+    /// The record of `market`, located once while the call stays in that market.
+    function _locateMarket(Located memory located, uint8 market) private view returns (Record) {
+        _switchMarket(located, market);
+
+        if (Record.unwrap(located.record) == 0) located.record = _locate(marketKey(market));
+        return located.record;
+    }
+
+    /// The account's position in `market`, located once while the call stays in that market.
+    function _locatePosition(Located memory located, uint8 market) private view returns (Record) {
+        _switchMarket(located, market);
+
+        if (Record.unwrap(located.position) == 0) {
+            located.position = _locate(positionKey(located.account, market));
+        }
+        return located.position;
+    }
+
+    function _switchMarket(Located memory located, uint8 market) private pure {
+        if (located.market == market) return;
+
+        located.market = market;
+        located.record = Record.wrap(0);
+        located.position = Record.wrap(0);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Settlement internals
     // ------------------------------------------------------------------------------------------
 
-    function _settleFills(address taker, Fill[] calldata fills, uint256 takerMarkets)
+    function _settleFills(Located memory taker, Fill[] calldata fills, uint256 takerMarkets)
         private
         returns (int256 realized, uint256 fees, uint256)
     {
@@ -397,25 +448,28 @@ abstract contract Exchange {
 
     /// Settles one fill for both sides. Returns the taker's realized profit or loss, the taker's
     /// fee and the taker's updated market bitmap.
-    function _settleFill(address taker, Fill calldata f, uint256 takerMarkets)
+    function _settleFill(Located memory taker, Fill calldata f, uint256 takerMarkets)
         private
         returns (int256 realized, uint256 fee, uint256)
     {
-        if (f.maker == taker || f.size == 0) revert InvalidFill();
+        if (f.maker == taker.account || f.size == 0) revert InvalidFill();
 
-        (uint8 market, uint256 price, int256 makerDelta, uint256 feeBps) = _fillMaker(f);
+        (uint8 market, uint256 price, int256 makerDelta, uint256 feeBps) = _fillMaker(taker, f);
 
-        (realized, takerMarkets) = _applyToPosition(taker, market, -makerDelta, price, takerMarkets);
+        Position storage position = _asPosition(_locatePosition(taker, market));
+        (realized, takerMarkets) =
+            _applyToPosition(position, market, -makerDelta, price, takerMarkets);
         fee = uint256(f.size) * price * feeBps / BPS;
 
-        emit Filled(market, f.maker, taker, f.size, price.toUint64());
+        emit Filled(market, f.maker, taker.account, f.size, price.toUint64());
         return (realized, fee, takerMarkets);
     }
 
     /// Settles the maker's side of a fill: the order slot, the market's trade stats, the
     /// maker's position and the release of the filled part's locked margin. Returns what the
-    /// taker's side needs.
-    function _fillMaker(Fill calldata f)
+    /// taker's side needs. The market's record is located through `taker`, where the taker's
+    /// side and later fills find it.
+    function _fillMaker(Located memory taker, Fill calldata f)
         private
         returns (uint8 market, uint256 price, int256 makerDelta, uint256 feeBps)
     {
@@ -424,7 +478,7 @@ abstract contract Exchange {
         (market, price, makerSold, remaining) = _takeFromOrder(f);
 
         uint256 marginBps;
-        (marginBps, feeBps) = _recordTrade(market, price, f.size);
+        (marginBps, feeBps) = _recordTrade(_locateMarket(taker, market), market, price, f.size);
 
         makerDelta = makerSold ? -int256(uint256(f.size)) : int256(uint256(f.size));
         _settleMaker(
@@ -448,11 +502,11 @@ abstract contract Exchange {
     }
 
     /// Updates the market's last price and volume, and returns its margin and fee rates.
-    function _recordTrade(uint8 market, uint256 price, uint256 size)
+    function _recordTrade(Record r, uint8 market, uint256 price, uint256 size)
         private
         returns (uint256 marginBps, uint256 feeBps)
     {
-        Market storage record = _listedMarket(_locate(marketKey(market)), market);
+        Market storage record = _listedMarket(r, market);
 
         record.lastPrice = price.toUint64();
         record.volume = (record.volume + size).toUint96();
@@ -471,8 +525,10 @@ abstract contract Exchange {
         (uint256 balance, uint256 locked, uint256 markets) =
             (account.balance, account.locked, account.markets);
 
+        Position storage position = _asPosition(_locate(positionKey(maker, market)));
+
         int256 realized;
-        (realized, markets) = _applyToPosition(maker, market, delta, price, markets);
+        (realized, markets) = _applyToPosition(position, market, delta, price, markets);
         locked -= releasedMargin;
 
         int256 cash = int256(balance) + realized;
@@ -486,13 +542,12 @@ abstract contract Exchange {
     /// Adds `delta` lots at `price` to a position. A position that closes realizes its profit
     /// or loss into the account's cash and leaves the market bitmap.
     function _applyToPosition(
-        address account,
+        Position storage position,
         uint8 market,
         int256 delta,
         uint256 price,
         uint256 markets
     ) private returns (int256 realized, uint256) {
-        Position storage position = _asPosition(_locate(positionKey(account, market)));
         (int256 size, int256 cost) = (position.size, position.cost);
 
         size += delta;
@@ -522,7 +577,7 @@ abstract contract Exchange {
     /// Cross-margin: equity across every open position must cover the margin those positions
     /// need plus the margin locked by resting orders. Reads a position and a market record for
     /// each market the account is in.
-    function _requireMargin(address account, int256 cash, uint256 locked, uint256 markets)
+    function _requireMargin(Located memory located, int256 cash, uint256 locked, uint256 markets)
         private
         view
     {
@@ -531,9 +586,8 @@ abstract contract Exchange {
 
         for (uint256 market; markets != 0; ++market) {
             if (markets & 1 != 0) {
-                Position storage position =
-                    _asPosition(_locate(positionKey(account, uint8(market))));
-                Market storage record = _asMarket(_locate(marketKey(uint8(market))));
+                (Position storage position, Market storage record) =
+                    _marginRecords(located, uint8(market));
 
                 (int256 size, int256 cost) = (position.size, position.cost);
                 (uint256 markPrice, uint256 marginBps) = (record.markPrice, record.marginBps);
@@ -545,18 +599,35 @@ abstract contract Exchange {
             markets >>= 1;
         }
 
-        if (equity < int256(required)) revert InsufficientMargin(account);
+        if (equity < int256(required)) revert InsufficientMargin(located.account);
+    }
+
+    /// The account's position in `market` and the market's record. The market the call worked in
+    /// is located already; any other is only read here, so it doesn't replace that one.
+    function _marginRecords(Located memory located, uint8 market)
+        private
+        view
+        returns (Position storage position, Market storage record)
+    {
+        if (market == located.market) {
+            position = _asPosition(_locatePosition(located, market));
+            record = _asMarket(_locateMarket(located, market));
+        } else {
+            position = _asPosition(_locate(positionKey(located.account, market)));
+            record = _asMarket(_locate(marketKey(market)));
+        }
     }
 
     /// Margin an order locks while it rests.
-    function _orderMargin(uint256 price, uint256 size, uint8 market)
+    function _orderMargin(Located memory located, uint256 price, uint256 size, uint8 market)
         private
         view
         returns (uint256)
     {
         if (size == 0) return 0;
 
-        return _margin(size, price, _listedMarket(_locate(marketKey(market)), market).marginBps);
+        Market storage record = _listedMarket(_locateMarket(located, market), market);
+        return _margin(size, price, record.marginBps);
     }
 
     /// Margin freed by filling `filled` of an order with `remaining` left: what the order

@@ -15,13 +15,13 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 
 | Records updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 record | 33,556 | 43,126 (+29%) | 34,813 (+4%) |
-| 2 records | 45,321 | 45,930 (+1%) | 36,445 (-20%) |
-| 10 records | 139,537 | 69,210 (-50%) | 49,609 (-64%) |
-| 30 records | 375,029 | 138,956 (-63%) | 82,441 (-78%) |
-| 30 records, 3 pages | 375,065 | 148,356 (-60%) | 104,437 (-72%) |
-| 2 unpacked records | 45,333 | 57,860 (+28%) | – |
-| 2 unpacked records, home-hint space | 45,333 | 57,470 (+27%) | 47,895 (+6%) |
+| 1 record | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
+| 2 records | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
+| 10 records | 139,537 | 66,462 (-52%) | 49,609 (-64%) |
+| 30 records | 375,029 | 124,818 (-67%) | 82,441 (-78%) |
+| 30 records, 3 pages | 375,065 | 144,189 (-62%) | 104,437 (-72%) |
+| 2 unpacked records | 45,333 | 55,828 (+23%) | – |
+| 2 unpacked records, home-hint space | 45,333 | 56,417 (+24%) | 47,895 (+6%) |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-record writes and
@@ -30,8 +30,8 @@ In a space that keeps home flags, a hint brings a record that was never packed w
 mapping entry, at a storage cost described under [Planning layouts](#planning-layouts).
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
-dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
-14 makers 52% less than the same exchange on mappings.
+dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker filling against
+14 makers 55% less than the same exchange on mappings.
 
 ## How it works
 
@@ -61,8 +61,8 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 - **Identity words.** Each packed record is stored with its identity, `keccak256(space, key)`,
   so any lookup can confirm it found the right record. Stale data can't be returned.
 - **Directory.** One page per space lists a 22-bit fingerprint and packed index for up to 1,016
-  records. The fingerprints are evenly spread hash bits, so interpolation search finds most
-  entries in about three probes.
+  records, 8 to a storage word. The fingerprints are evenly spread hash bits, so a search can
+  guess which word to read and usually settles in one or two reads.
 
 ### Finding a record
 
@@ -101,6 +101,28 @@ ignore `HOME`. Without a hint, or with a wrong one, the lookup searches the dire
 that page once per transaction. Every path ends at an identity word or the flag, so a wrong or
 stale hint can cost gas but never returns the wrong record. Load a batch's hints once with
 `useHints` and every `find` in the transaction uses them.
+
+A search interpolates which directory word should hold the key's fingerprint, reads it and
+compares all 8 entries at once. A miss rules out everything on one side of that word, so the
+next guess is close. Records at home cost the same to search for as packed ones. Over random
+directories, with the page already loaded, from `make gas`:
+
+| Directory and record | Probes, mean | Probes, max | Gas, mean | Gas, max |
+| --- | ---: | ---: | ---: | ---: |
+| 64 packed, packed record | 1.25 | 3 | 968 | 1,998 |
+| 64 packed, record at home | 1.33 | 3 | 1,006 | 2,012 |
+| 512 packed, packed record | 1.81 | 4 | 1,294 | 2,592 |
+| 512 packed, record at home | 1.92 | 4 | 1,348 | 2,601 |
+| 1016 packed, packed record | 1.94 | 4 | 1,362 | 2,592 |
+| 1016 packed, record at home | 1.96 | 4 | 1,368 | 2,606 |
+
+Probes are the directory words read after the count. Fingerprints chosen to defeat the guess, as
+keys ground to be packed could be, make the search fall back to bisection after five probes,
+which caps it at 12.
+
+Each lookup without a hint searches again, even for a record found earlier in the call. Look a
+record up once per call and pass the `Record` along, as long as nothing in between could
+rebalance (see [Using records safely](#using-records-safely)).
 
 ### Rebalancing
 
@@ -278,12 +300,12 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
 
   | Packing from home, 16 records per call | Gas per record |
   | --- | ---: |
-  | 1-word records | 59,241 |
-  | 3-word records | 94,922 |
-  | 8-word records | 186,309 |
-  | 8-word records, 1 word set | 62,997 |
-  | 1-word records, never written | 38,825 |
-  | 1-word records, never written, home-hint space | 59,107 |
+  | 1-word records | 58,470 |
+  | 3-word records | 94,479 |
+  | 8-word records | 185,947 |
+  | 8-word records, 1 word set | 62,635 |
+  | 1-word records, never written | 38,054 |
+  | 1-word records, never written, home-hint space | 58,395 |
 
   Filling a space of 1,016 one-word records takes about 55M gas, so split large migrations into
   transactions sized from the table above; listing new records in fingerprint order also skips a
@@ -295,10 +317,10 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
   | Operation (one-word records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
   | --- | ---: | ---: | ---: |
   | Empty rebalance | 22,861 | 22,861 | 22,861 |
-  | Swap two records | 59,726 | 63,102 | 61,648 |
-  | Move one record | 97,413 | 101,179 | 98,589 |
-  | Evict one record | 93,656 | 161,492 | 230,665 |
-  | Replace one record with another | 114,303 | 178,279 | 250,839 |
+  | Swap two records | 59,436 | 60,025 | 61,184 |
+  | Move one record | 97,658 | 98,247 | 98,264 |
+  | Evict one record | 93,901 | 158,560 | 230,340 |
+  | Replace one record with another | 114,309 | 175,309 | 250,450 |
   | Resubmit the whole layout | 146,866 | 1,008,186 | 1,980,958 |
 
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
