@@ -34,10 +34,10 @@ pagepack pays off when two things hold:
 
 - **Transactions change many entries at once.** A trade pays a dozen makers, a settlement nets
   many accounts, a keeper updates a batch of positions. A transaction that touches one entry costs
-  a little more than with a mapping, because finding an entry costs gas.
+  more than with a mapping, because finding an entry costs gas: 4% more with a hint, 30% without.
 - **A small, shifting set of entries takes most of the traffic.** The busiest accounts, markets or
   positions change over time, so a periodic rebalance moves the layout with them. A map packs up
-  to 1,016 entries; the rest stay at home and cost what a mapping entry does.
+  to 1,016 entries; the rest stay at home, a page each like mapping entries.
 
 ## Results
 
@@ -261,7 +261,7 @@ Packing entries as they are created would group them by when they arrived, not b
 used:
 
 - Each new entry would pay for an identity word and a sorted directory insert, roughly 40,000
-  gas or more, where starting at home costs what a mapping entry does.
+  gas or more, where starting at home costs about what a mapping entry does.
 - Entries created together are rarely the ones used together.
 - A map packs at most 1,016 entries, and those should be the busiest, not the first.
 
@@ -310,8 +310,9 @@ call sites won't change if it does.
 
 pagepack applies layouts; choosing them happens off-chain. What a planner needs to know:
 
-- **Capacity.** A map packs up to 1,016 entries, at indices below 1,024. The rest stay at home
-  and cost what a mapping entry does.
+- **Capacity.** A map packs up to 1,016 entries, at indices below 1,024. The rest stay at home,
+  a page each like mapping entries, and finding one still searches the directory unless it has a
+  `HOME` hint.
 - **Fingerprint collisions.** The directory knows entries by a 22-bit fingerprint, so two entries
   with the same one can't both be packed. Among 1,016 random keys there's an 11.6% chance some
   pair collides (3.1% at 512, 0.1% at 100). Check new placements with `fingerprintOf` and leave
