@@ -28,6 +28,17 @@ are often used in the same transaction:
 Nothing moves on its own. An off-chain planner watches which entries are used together, and the
 admin applies its layout ([why](#why-entries-dont-pack-themselves)).
 
+## When it pays off
+
+pagepack pays off when two things hold:
+
+- **Transactions change many entries at once.** A trade pays a dozen makers, a settlement nets
+  many accounts, a keeper updates a batch of positions. A transaction that touches one entry costs
+  a little more than with a mapping, because finding an entry costs gas.
+- **A small, shifting set of entries takes most of the traffic.** The busiest accounts, markets or
+  positions change over time, so a periodic rebalance moves the layout with them. A map packs up
+  to 1,016 entries; the rest stay at home and cost what a mapping entry does.
+
 ## Results
 
 Updating existing one-slot balances in one transaction, Monad gas schedule, from `make gas`:
@@ -70,45 +81,60 @@ pagepack/=lib/pagepack/src/
 ```
 
 Give each kind of entry a typed map: copy
-[`examples/loans/LoanMap.sol`](examples/loans/LoanMap.sol) and rename its struct, key and
-functions. Contracts then use entries as structs:
+[`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) and rename its struct,
+key and functions. Here an order book pays the makers whose asks a buy fills:
 
 ```solidity
 import {PagePack} from "pagepack/PagePack.sol";
-import {LoanMap, loanMap} from "./LoanMap.sol";
+import {BalanceMap, balanceMap} from "./BalanceMap.sol";
 
-contract Lender {
-    LoanMap internal immutable LOANS = loanMap("app.loans");
+contract OrderBook {
+    BalanceMap internal immutable BALANCES = balanceMap("book.balances");
 
-    function accrue(uint256 loanId, uint128 amount) external {
-        LOANS.find(loanId).interest += amount;
+    modifier withHints(PagePack.Hint[] calldata hints) {
+        BALANCES.map().useHints(hints);
+        _;
     }
 
-    /// Hints are optional. Loaded once, they serve every lookup in the transaction.
-    function accrueAll(uint256[] calldata ids, uint128 amount, PagePack.Hint[] calldata hints)
+    function buy(uint64[] calldata askIds, PagePack.Hint[] calldata hints)
         external
+        withHints(hints)
     {
-        LOANS.map().useHints(hints);
-
-        for (uint256 i; i < ids.length; ++i) {
-            LOANS.find(ids[i]).interest += amount;
+        for (uint256 i; i < askIds.length; ++i) {
+            Order storage ask = orders[askIds[i]];
+            BALANCES.find(ask.maker).quote += ask.size * ask.price;
         }
-    }
-
-    function rebalance(bytes32[] calldata evictions, PagePack.Placement[] calldata placements)
-        external
-        onlyAdmin
-    {
-        LOANS.map().rebalance(evictions, placements);
+        // ... charge the taker, remove the filled asks
     }
 }
 ```
 
-The module holds the `Loan` struct and a `LoanMap` type wrapping a `PagedMap`. `loanMap(name)`
-takes the map's width from the struct itself: in a `Loan[2] storage` array, the slot of the
-second element is the struct's size. `find(loanId)` returns `Loan storage` wherever the entry
-lives, and Solidity handles the field offsets and packing. `loanKey(loanId)` gives the `bytes32`
-key that hints, layouts and off-chain tools use, and `map()` the underlying `PagedMap`.
+The same contract on a plain mapping:
+
+```solidity
+contract OrderBook {
+    mapping(address account => Balance) internal balances;
+
+    function buy(uint64[] calldata askIds) external {
+        for (uint256 i; i < askIds.length; ++i) {
+            Order storage ask = orders[askIds[i]];
+            balances[ask.maker].quote += ask.size * ask.price;
+        }
+        // ... charge the taker, remove the filled asks
+    }
+}
+```
+
+The loop is the same: `balances[maker]` becomes `BALANCES.find(maker)`, and hints are optional.
+The admin packs the busiest makers together with `BALANCES.map().rebalance(...)`, and repacks
+as they change, so a buy that fills 14 makers loads one or two pages instead of 14.
+
+The module holds the `Balance` struct and a `BalanceMap` type wrapping a `PagedMap`.
+`balanceMap(name)` takes the map's width from the struct itself: in a `Balance[2] storage` array,
+the slot of the second element is the struct's size. `find(account)` returns `Balance storage`
+wherever the entry lives, and Solidity handles the field offsets and packing. `balanceKey(account)`
+gives the `bytes32` key that hints, layouts and off-chain tools use, and `map()` the underlying
+`PagedMap`.
 
 Solidity reads and writes each field separately. To load the slot only once, read the fields you
 need in one statement and write the changed ones together, after any checks. Each extra field
@@ -257,10 +283,11 @@ An `Entry` is a raw storage pointer, and so is a struct laid over one. A few rul
   [`test/TypedEntries.t.sol`](test/TypedEntries.t.sol) checks that and shows what a wider struct
   breaks.
 - **Cast or bit-pack keys; hash only keys over 32 bytes.** pagepack hashes the map and key
-  together, so a key only has to be unique within its map. Cast a single value
-  (`bytes32(loanId)`), bit-pack a composite key that fits in 32 bytes, as the exchange's
-  `positionKey` packs a trader and a market, and hash only longer ones, since hashing adds gas to
-  every lookup. In a map of several kinds, tag each key with its kind so kinds never collide.
+  together, so a key only has to be unique within its map. Cast a single value, such as an
+  address (`bytes32(uint256(uint160(account)))`), bit-pack a composite key that fits in 32 bytes,
+  as the exchange's `positionKey` packs a trader and a market, and hash only longer ones, since
+  hashing adds gas to every lookup. In a map of several kinds, tag each key with its kind so kinds
+  never collide.
 - **Look entries up again after anything that could rebalance.** An `Entry`, and a struct laid
   over one, points wherever the entry was when you looked it up. Look it up again after anything
   in the same transaction that could rebalance, including an external call that might re-enter.
@@ -307,7 +334,7 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
 | --- | --- |
 | `src/` | The library: `PagePack.sol`, with the directory's bit-level format in `LibDirectory.sol` and a sort copied from Solady in `utils/`. No dependencies. |
 | `test/` | Unit, fuzz and invariant tests, example tests, and `test/gas/` benchmarks. |
-| `examples/loans/` | A typed map module to copy for each kind of entry. |
+| `examples/orderbook/` | A typed map module to copy for each kind of entry: traders' balances in an order book. |
 | `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
 | `docs/` | Reference: lookup and rebalance details, and their costs. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |
