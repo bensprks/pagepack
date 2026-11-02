@@ -8,36 +8,36 @@ on every transaction, whether matching runs on-chain against a resting book (lik
 | File | What it does |
 | --- | --- |
 | [`Exchange.sol`](Exchange.sol) | Deposits, quoting with margin checks, settlement of a taker against makers. Storage-agnostic. |
-| [`ExchangeMap.sol`](ExchangeMap.sol) | The record structs and a typed pagepack map holding all four kinds, with their keys. |
-| [`PackedExchange.sol`](PackedExchange.sol) | Stores records in the typed map and lets an admin rebalance. About 80 lines. |
+| [`ExchangeMap.sol`](ExchangeMap.sol) | The four entry structs and a typed pagepack map holding them, with their keys. |
+| [`PackedExchange.sol`](PackedExchange.sol) | Stores entries in the typed map and lets an admin rebalance. About 80 lines. |
 | [`MAINNET.md`](MAINNET.md) | What Perpl's mainnet traffic and storage look like, and what the gaps mean for its layout. |
 
 ## Why exchanges
 
 On a busy exchange, a few market makers account for most transactions, and each of their
-transactions reads and writes several small records: the account, an order or three, and a
+transactions reads and writes several small entries: the account, an order or three, and a
 position in every market the account trades, because margin is checked across all of them. In a
-typical layout each of those records is a mapping entry on its own page. On Monad that costs
-8,100 gas per record before any work is done.
+typical layout each of those entries is a mapping entry on its own page. On Monad that costs
+8,100 gas per entry before any work is done.
 
-Those records are used together all the time, and which accounts are hot changes over time.
-That is the case pagepack is built for: put each active market maker's records on one page, put
-every market's record on one shared page, and repack when activity shifts.
+Those entries are used together all the time, and which accounts are hot changes over time.
+That is the case pagepack is built for: put each active market maker's entries on one page, put
+every market's entry on one shared page, and repack when activity shifts.
 
 ## Design
 
-**Records.** Accounts, positions, order slots and markets are all one-slot structs. `Exchange`
-asks a storage hook for each record (`_account(trader)`, `_position(trader, market)`,
+**Entries.** Accounts, positions, order slots and markets are all one-slot structs. `Exchange`
+asks a storage hook for each entry (`_account(trader)`, `_position(trader, market)`,
 `_order(trader, index)`, `_market(market)`), works on the struct in place and does everything
 else itself. `PackedExchange` answers from `ExchangeMap`, a typed map holding all four kinds;
 the benchmark baseline answers from Solidity mappings. Both share every line of logic.
 
-`ExchangeMap` bit-packs each record's natural key into a `bytes32` with its kind in the top
+`ExchangeMap` bit-packs each entry's natural key into a `bytes32` with its kind in the top
 byte (`accountKey`, `positionKey`, `orderKey`, `marketKey`), for hints and layouts. Its width is
 pinned at one slot, and creating it checks that every struct fits.
 
-**One lookup per record per call.** Without a hint, every pagepack lookup searches the map's
-directory. A call keeps the records of the market it is working in, so a settlement locates the
+**One lookup per entry per call.** Without a hint, every pagepack lookup searches the map's
+directory. A call keeps the entries of the market it is working in, so a settlement locates the
 market and the taker's position once rather than on every fill, and a re-quote finds a market's
 margin rate without locating it again for each order.
 
@@ -53,7 +53,7 @@ knows the layout and can always pass them; anyone else passes none.
 
 The exchange's map keeps home flags (`mapWithHomeHints`). Takers are long-tail accounts that
 are never packed, and with a `HOME` hint for the taker a fully hinted settlement never loads the
-directory. The flags cost one storage slot on the home page of each packed record: a few hundred
+directory. The flags cost one storage slot on the home page of each packed entry: a few hundred
 slots for the active accounts.
 
 ## Trust assumptions
@@ -84,8 +84,8 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 158,495 | 79,740 (-50%) | 77,191 (-51%) |
-| Re-quote 3 orders, one market | 106,006 | 74,247 (-30%) | 67,069 (-37%) |
+| Re-quote 1 order, maker in 6 markets | 158,495 | 79,762 (-50%) | 77,213 (-51%) |
+| Re-quote 3 orders, one market | 106,006 | 74,269 (-30%) | 67,091 (-37%) |
 | Taker vs 3 makers | 206,535 | 126,779 (-39%) | 118,316 (-43%) |
 | Taker vs 14 makers | 706,264 | 330,823 (-53%) | 320,490 (-55%) |
 
@@ -95,14 +95,14 @@ account; the others quote one market. The taker is a long-tail account and is no
 | New order in a reused slot | 69,442 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
-  because its margin check reads a position and a market record for every one of them.
+  because its margin check reads a position and a market entry for every one of them.
 - **Settlement** saves on every maker and grows with the batch: each maker's account, order and
   position share a page with other makers'.
 - **A better mapping layout would close part of the gap.** A mapping of per-trader structs keeps
   one trader's account, orders and positions on one page, so the multi-market re-quote would load
-  that page plus one per market record. A settlement would still load a page per maker. pagepack
-  puts many makers' records, and every market's, on a page or two.
-- **Without hints, results depend a little on the records' fingerprints.** A directory search
+  that page plus one per market entry. A settlement would still load a page per maker. pagepack
+  puts many makers' entries, and every market's, on a page or two.
+- **Without hints, results depend a little on the entries' fingerprints.** A directory search
   takes one to a few probes depending on the fingerprint it looks for, and a map's name decides
   every fingerprint. The same 14-maker settlement without hints, under six map names:
 
@@ -117,7 +117,7 @@ account; the others quote one market. The taker is a long-tail account and is no
 
   Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
-  funding records. In the mainnet sample, Perpl's re-quotes touched 16 to 46 pages against this
+  funding entries. In the mainnet sample, Perpl's re-quotes touched 16 to 46 pages against this
   model's 4 to 14 (see [MAINNET.md](MAINNET.md)). Whether a real exchange saves more is a
   hypothesis: the extra pages hold state this model doesn't consolidate.
 
@@ -126,8 +126,8 @@ account; the others quote one market. The taker is a long-tail account and is no
 The admin applies layouts chosen off-chain from recent activity, e.g. daily:
 
 1. Rank accounts by how often they trade, and markets by how often they are read.
-2. Place each hot account's account, order-slot and position records together, and every market
-   record on one page. Records with the same `index / recordsPerPage()` share a page (64 here).
-3. Call `rebalance(evictions, placements)` with only the records that change. It applies as one
-   step, so a layout can swap records directly. Old hints keep working, without the saving,
+2. Place each hot account's account, order-slot and position entries together, and every market
+   entry on one page. Entries with the same `index / entriesPerPage()` share a page (64 here).
+3. Call `rebalance(evictions, placements)` with only the entries that change. It applies as one
+   step, so a layout can swap entries directly. Old hints keep working, without the saving,
    until callers refresh them with `hintOf`.

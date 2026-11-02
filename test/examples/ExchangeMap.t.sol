@@ -11,18 +11,18 @@ import {
     positionKey
 } from "../../examples/exchange/ExchangeMap.sol";
 
-/// The exchange's typed map: four kinds of one-slot record in one map.
+/// The exchange's typed map: four kinds of one-slot entry in one map.
 contract ExchangeMapTest is Test {
-    ExchangeMap internal immutable RECORDS = exchangeMap("test.exchange");
+    ExchangeMap internal immutable ENTRIES = exchangeMap("test.exchange");
 
     address internal trader = makeAddr("trader");
 
     function test_mapIsOneSlotWideWithHomeHints() public view {
-        assertEq(RECORDS.map().width(), 1);
-        assertTrue(RECORDS.map().homeHints());
+        assertEq(ENTRIES.map().width(), 1);
+        assertTrue(ENTRIES.map().homeHints());
     }
 
-    /// Keys decide where records live, so their layout is fixed once records are written.
+    /// Keys decide where entries live, so their layout is fixed once entries are written.
     function test_keysPackTheirKindAndNaturalKey() public view {
         uint256 bits = uint160(trader);
 
@@ -33,14 +33,14 @@ contract ExchangeMapTest is Test {
     }
 
     function test_eachGetterUsesItsKindsKey() public {
-        RECORDS.account(trader).balance = 1;
-        RECORDS.position(trader, 2).size = 2;
-        RECORDS.order(trader, 2).price = 3;
-        RECORDS.market(2).markPrice = 4;
+        ENTRIES.account(trader).balance = 1;
+        ENTRIES.position(trader, 2).size = 2;
+        ENTRIES.order(trader, 2).price = 3;
+        ENTRIES.market(2).markPrice = 4;
 
-        assertEq(RECORDS.map().find(accountKey(trader)).read(0), 1);
-        assertEq(RECORDS.map().find(positionKey(trader, 2)).read(0), 2);
-        assertEq(RECORDS.map().find(orderKey(trader, 2)).read(0), 3);
-        assertEq(RECORDS.map().find(marketKey(2)).read(0), 4);
+        assertEq(ENTRIES.map().find(accountKey(trader)).read(0), 1);
+        assertEq(ENTRIES.map().find(positionKey(trader, 2)).read(0), 2);
+        assertEq(ENTRIES.map().find(orderKey(trader, 2)).read(0), 3);
+        assertEq(ENTRIES.map().find(marketKey(2)).read(0), 4);
     }
 }

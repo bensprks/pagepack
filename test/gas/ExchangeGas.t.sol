@@ -22,17 +22,17 @@ import {TestToken} from "../examples/utils/TestToken.sol";
 /// markets and 8 resting orders across them. Makers 1-15 each hold a position and 4 asks in
 /// market 1. The taker is a long-tail account and is never packed.
 ///
-/// Packed layout, 64 one-slot records per page:
-///   page 0   all 8 market records, the fee account, maker 0 (account, 8 order slots, 6
+/// Packed layout, 64 one-slot entries per page:
+///   page 0   all 8 market entries, the fee account, maker 0 (account, 8 order slots, 6
 ///            positions) and makers 1-6 (account, 4 order slots, 1 position each)
 ///   page 1   makers 7-15
 ///
-/// Each maker's records sit on one page; _pack asserts it.
+/// Each maker's entries sit on one page; _pack asserts it.
 contract ExchangeGasTest is Test {
     uint8 internal constant MARKETS = 8;
     uint8 internal constant BOOK = 1;
     uint256 internal constant MAKERS = 16;
-    uint256 internal constant RECORDS_PER_PAGE = 64;
+    uint256 internal constant ENTRIES_PER_PAGE = 64;
     string internal constant MAP_NAME = "pagepack.exchange";
 
     address internal admin = makeAddr("admin");
@@ -121,7 +121,7 @@ contract ExchangeGasTest is Test {
     // Map names
     // ------------------------------------------------------------------------------------------
 
-    /// A map's name decides every record's fingerprint, and with it how many probes each
+    /// A map's name decides every entry's fingerprint, and with it how many probes each
     /// directory search takes. Settles 14 makers without hints in exchanges that differ only in
     /// their map's name.
     function test_gas_settle14_byMapName() public {
@@ -220,7 +220,7 @@ contract ExchangeGasTest is Test {
         keys[count * 3] = marketKey(BOOK);
         keys[count * 3 + 1] = accountKey(fees);
 
-        // The operator knows the taker too, though its records aren't packed.
+        // The operator knows the taker too, though its entries aren't packed.
         keys[count * 3 + 2] = accountKey(taker);
         keys[count * 3 + 3] = positionKey(taker, BOOK);
 
@@ -236,7 +236,7 @@ contract ExchangeGasTest is Test {
     // Hints
     // ------------------------------------------------------------------------------------------
 
-    /// Hints for `keys`, as an off-chain caller would build them. Records that aren't packed get
+    /// Hints for `keys`, as an off-chain caller would build them. Entries that aren't packed get
     /// PagePack.HOME.
     function _hints(bytes32[] memory keys) internal view returns (PagePack.Hint[] memory hints) {
         hints = new PagePack.Hint[](keys.length);
@@ -350,7 +350,7 @@ contract ExchangeGasTest is Test {
     }
 
     function _pack(PackedExchange exchange) internal {
-        PagePack.Placement[] memory placements = new PagePack.Placement[](RECORDS_PER_PAGE * 2);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](ENTRIES_PER_PAGE * 2);
         uint256 count;
         uint256 next;
 
@@ -373,20 +373,20 @@ contract ExchangeGasTest is Test {
         vm.prank(admin);
         exchange.rebalance(new bytes32[](0), placements);
 
-        assertEq(exchange.recordsPerPage(), RECORDS_PER_PAGE);
+        assertEq(exchange.entriesPerPage(), ENTRIES_PER_PAGE);
 
-        // Fixture invariant: each maker's records share one page.
+        // Fixture invariant: each maker's entries share one page.
         for (uint256 i; i < MAKERS; ++i) {
             bytes32[] memory keys = _ownKeys(i);
-            uint256 page = (exchange.hintOf(keys[0]) - 1) / RECORDS_PER_PAGE;
+            uint256 page = (exchange.hintOf(keys[0]) - 1) / ENTRIES_PER_PAGE;
 
             for (uint256 k = 1; k < keys.length; ++k) {
-                assertEq((exchange.hintOf(keys[k]) - 1) / RECORDS_PER_PAGE, page, "split maker");
+                assertEq((exchange.hintOf(keys[k]) - 1) / ENTRIES_PER_PAGE, page, "split maker");
             }
         }
     }
 
-    /// A maker's own records: its account, order slots and positions.
+    /// A maker's own entries: its account, order slots and positions.
     function _ownKeys(uint256 index) internal view returns (bytes32[] memory keys) {
         address maker = makers[index];
         uint8 orders = index == 0 ? 8 : 4;
@@ -412,8 +412,8 @@ contract ExchangeGasTest is Test {
         uint256 next,
         bytes32[] memory keys
     ) internal pure returns (uint256, uint256) {
-        uint256 offset = next % RECORDS_PER_PAGE;
-        if (offset + keys.length > RECORDS_PER_PAGE) next += RECORDS_PER_PAGE - offset;
+        uint256 offset = next % ENTRIES_PER_PAGE;
+        if (offset + keys.length > ENTRIES_PER_PAGE) next += ENTRIES_PER_PAGE - offset;
 
         for (uint256 i; i < keys.length; ++i) {
             placements[count++] = PagePack.Placement(keys[i], next++);

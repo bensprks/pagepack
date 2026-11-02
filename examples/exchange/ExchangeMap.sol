@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 
-// The exchange's records in one typed map, so a layout can mix kinds on a page: each active
-// market maker's account, order slots and positions on one page, and every market's record on
+// The exchange's entries in one typed map, so a layout can mix kinds on a page: each active
+// market maker's account, order slots and positions on one page, and every market's entry on
 // another.
 //
-//     ExchangeMap internal immutable RECORDS = exchangeMap("pagepack.exchange");
+//     ExchangeMap internal immutable ENTRIES = exchangeMap("pagepack.exchange");
 //
-//     Position storage position = RECORDS.position(trader, market);
+//     Position storage position = ENTRIES.position(trader, market);
 //
 // Every kind shares the map's one-slot width, which is pinned rather than taken from a struct,
 // so exchangeMap checks each struct against it when the map is created.
 
-// Records. Solidity packs each struct's fields into one slot in declaration order, starting from
+// Entries. Solidity packs each struct's fields into one slot in declaration order, starting from
 // the lowest bits.
 
 struct Account {
@@ -58,67 +58,67 @@ uint256 constant MARKET_KIND = 4 << 248;
 
 /// Creates the exchange's map, one slot wide and with home flags. Takers are long-tail accounts
 /// that are never packed, and with a HOME hint for the taker a fully hinted settlement never
-/// loads the directory. The flags cost one slot on the home page of each packed record.
-/// @dev Intended for an immutable. Reverts if any record struct is wider than one slot.
+/// loads the directory. The flags cost one slot on the home page of each packed entry.
+/// @dev Intended for an immutable. Reverts if any entry struct is wider than one slot.
 function exchangeMap(string memory name) view returns (ExchangeMap) {
-    PagedMap records = PagePack.mapWithHomeHints(name, 1);
+    PagedMap entries = PagePack.mapWithHomeHints(name, 1);
 
-    records.requireFits(_accountSlots());
-    records.requireFits(_positionSlots());
-    records.requireFits(_orderSlots());
-    records.requireFits(_marketSlots());
+    entries.requireFits(_accountSlots());
+    entries.requireFits(_positionSlots());
+    entries.requireFits(_orderSlots());
+    entries.requireFits(_marketSlots());
 
-    return ExchangeMap.wrap(PagedMap.unwrap(records));
+    return ExchangeMap.wrap(PagedMap.unwrap(entries));
 }
 
 // ----------------------------------------------------------------------------------------------
-// Records
+// Entries
 // ----------------------------------------------------------------------------------------------
 
-// Each returns the record wherever it currently lives. Look it up again after anything that
+// Each returns the entry wherever it currently lives. Look it up again after anything that
 // could rebalance.
 
-function account(ExchangeMap records, address trader) view returns (Account storage record) {
-    Record r = records.map().find(accountKey(trader));
+function account(ExchangeMap entries, address trader) view returns (Account storage entry) {
+    Entry e = entries.map().find(accountKey(trader));
 
     assembly ("memory-safe") {
-        record.slot := r
+        entry.slot := e
     }
 }
 
-function position(ExchangeMap records, address trader, uint8 marketId)
+function position(ExchangeMap entries, address trader, uint8 marketId)
     view
-    returns (Position storage record)
+    returns (Position storage entry)
 {
-    Record r = records.map().find(positionKey(trader, marketId));
+    Entry e = entries.map().find(positionKey(trader, marketId));
 
     assembly ("memory-safe") {
-        record.slot := r
+        entry.slot := e
     }
 }
 
-function order(ExchangeMap records, address trader, uint8 index)
+function order(ExchangeMap entries, address trader, uint8 index)
     view
-    returns (Order storage record)
+    returns (Order storage entry)
 {
-    Record r = records.map().find(orderKey(trader, index));
+    Entry e = entries.map().find(orderKey(trader, index));
 
     assembly ("memory-safe") {
-        record.slot := r
+        entry.slot := e
     }
 }
 
-function market(ExchangeMap records, uint8 marketId) view returns (Market storage record) {
-    Record r = records.map().find(marketKey(marketId));
+function market(ExchangeMap entries, uint8 marketId) view returns (Market storage entry) {
+    Entry e = entries.map().find(marketKey(marketId));
 
     assembly ("memory-safe") {
-        record.slot := r
+        entry.slot := e
     }
 }
 
 /// The underlying map, for hints and rebalancing.
-function map(ExchangeMap records) pure returns (PagedMap) {
-    return PagedMap.wrap(ExchangeMap.unwrap(records));
+function map(ExchangeMap entries) pure returns (PagedMap) {
+    return PagedMap.wrap(ExchangeMap.unwrap(entries));
 }
 
 // ----------------------------------------------------------------------------------------------

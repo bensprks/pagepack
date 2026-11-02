@@ -3,9 +3,9 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack} from "pagepack/PagePack.sol";
-import {RecordStore} from "../utils/RecordStore.sol";
+import {EntryStore} from "../utils/EntryStore.sol";
 
-/// Drives a store with random writes, rebalances and swaps, keeping a model of where every record
+/// Drives a store with random writes, rebalances and swaps, keeping a model of where every entry
 /// should be and what it should hold. Rebalance requests are mostly valid, with some deliberately
 /// broken ones; the model decides independently which should succeed.
 contract RebalanceHandler is Test {
@@ -15,7 +15,7 @@ contract RebalanceHandler is Test {
     // Spread over three packed pages and up to five directory words.
     uint256 public constant INDICES = 100;
 
-    RecordStore public immutable store;
+    EntryStore public immutable store;
     bytes32[KEYS] internal keys;
 
     // The model: each key's packed index plus one (0 at home), the reverse, and the data.
@@ -28,7 +28,7 @@ contract RebalanceHandler is Test {
     uint256 public rejected;
     uint256 public mismatches;
 
-    constructor(RecordStore store_) {
+    constructor(EntryStore store_) {
         store = store_;
 
         for (uint256 i; i < KEYS; ++i) {
@@ -78,7 +78,7 @@ contract RebalanceHandler is Test {
             uint256 roll = _random(seed, 200 + i);
 
             if (roll % 4 == 0) {
-                // Occasionally evicts a record that isn't packed.
+                // Occasionally evicts an entry that isn't packed.
                 evicted[evictions++] = k;
             } else {
                 placedKeys[placements] = k;
@@ -89,7 +89,7 @@ contract RebalanceHandler is Test {
         _submit(evicted, evictions, placedKeys, placedAt, placements);
     }
 
-    /// Swaps two packed records, which is always valid.
+    /// Swaps two packed entries, which is always valid.
     function swap(uint256 a, uint256 b) external {
         if (packed < 2) return;
 
@@ -170,7 +170,7 @@ contract RebalanceHandler is Test {
             if (index < INDICES) claimed[index] = true;
         }
 
-        // Every target must be empty or held by a record the request names.
+        // Every target must be empty or held by an entry the request names.
         for (uint256 i; i < placements; ++i) {
             uint256 index = placedAt[i];
             if (index >= INDICES) continue;
@@ -189,7 +189,7 @@ contract RebalanceHandler is Test {
         uint256[] memory placedAt,
         uint256 placements
     ) internal {
-        // Vacate every named record's old index before filling the new ones.
+        // Vacate every named entry's old index before filling the new ones.
         for (uint256 i; i < evictions; ++i) {
             _vacate(evicted[i]);
         }
@@ -240,13 +240,13 @@ contract RebalanceHandler is Test {
 
 /// Runs once per kind of map: with home flags and HOME hints, and without.
 abstract contract RebalanceInvariantTest is Test {
-    RecordStore internal store;
+    EntryStore internal store;
     RebalanceHandler internal handler;
 
     function homeHints() internal pure virtual returns (bool);
 
     function setUp() public {
-        store = new RecordStore(2, homeHints());
+        store = new EntryStore(2, homeHints());
         handler = new RebalanceHandler(store);
 
         // The model assumes no two keys share a fingerprint, so any request it accepts is valid.
@@ -272,9 +272,9 @@ abstract contract RebalanceInvariantTest is Test {
         assertEq(handler.mismatches(), 0);
     }
 
-    /// Every record holds its data and is found where the model says, by every kind of lookup.
+    /// Every entry holds its data and is found where the model says, by every kind of lookup.
     /// Maps without home flags never write one and ignore HOME hints.
-    function invariant_recordsMatchModel() public view {
+    function invariant_entriesMatchModel() public view {
         assertEq(store.packedCount(), handler.packed());
 
         for (uint256 k; k < handler.KEYS(); ++k) {

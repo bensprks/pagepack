@@ -13,8 +13,8 @@ import {
     positionKey
 } from "../../../examples/exchange/ExchangeMap.sol";
 
-/// Benchmark baseline: the same exchange with every record in an ordinary Solidity mapping, so
-/// each account, position, order and market record sits on its own page, as in Perpl today.
+/// Benchmark baseline: the same exchange with every entry in an ordinary Solidity mapping, so
+/// each account, position, order and market entry sits on its own page, as in Perpl today.
 /// Positions and orders are keyed like the packed exchange's, so every lookup hashes once in
 /// both versions.
 contract MappingExchange is Exchange {

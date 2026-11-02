@@ -16,7 +16,7 @@ import {Account, Market, Order, Position} from "./ExchangeMap.sol";
 /// This is a storage benchmark, not a production exchange. It trusts its operator as the
 /// matching and risk engine: see {settle} and the trust assumptions in the README.
 ///
-/// Every piece of state is a one-slot record struct (see ExchangeMap.sol), and where a record
+/// Every piece of state is a one-slot struct (see ExchangeMap.sol), and where an entry
 /// lives is left to the storage hooks, which return the struct in place. The PagePack version
 /// answers them from a typed map and the plain-mapping baseline from Solidity mappings. Both share
 /// all of the logic below, so benchmarks comparing them measure storage layout and nothing else.
@@ -106,12 +106,12 @@ abstract contract Exchange {
     {
         if (market >= MAX_MARKETS || markPrice == 0) revert UnknownMarket(market);
 
-        Market storage record = _market(market);
-        if (record.markPrice != 0) revert MarketExists(market);
+        Market storage entry = _market(market);
+        if (entry.markPrice != 0) revert MarketExists(market);
 
-        record.markPrice = markPrice;
-        record.marginBps = marginBps;
-        record.takerFeeBps = takerFeeBps;
+        entry.markPrice = markPrice;
+        entry.marginBps = marginBps;
+        entry.takerFeeBps = takerFeeBps;
     }
 
     /// @notice Stand-in for an oracle update.
@@ -240,8 +240,8 @@ abstract contract Exchange {
         view
         returns (uint256 balance, uint256 locked, uint256 markets)
     {
-        Account storage record = _account(account);
-        return (record.balance, record.locked, record.markets);
+        Account storage entry = _account(account);
+        return (entry.balance, entry.locked, entry.markets);
     }
 
     function positionOf(address account, uint8 market)
@@ -249,8 +249,8 @@ abstract contract Exchange {
         view
         returns (int256 size, int256 cost)
     {
-        Position storage record = _position(account, market);
-        return (record.size, record.cost);
+        Position storage entry = _position(account, market);
+        return (entry.size, entry.cost);
     }
 
     function orderOf(address account, uint8 index)
@@ -258,8 +258,8 @@ abstract contract Exchange {
         view
         returns (uint256 price, uint256 size, uint8 market, bool isAsk)
     {
-        Order storage record = _order(account, index);
-        return (record.price, record.size, record.market, record.isAsk);
+        Order storage entry = _order(account, index);
+        return (entry.price, entry.size, entry.market, entry.isAsk);
     }
 
     function marketOf(uint8 market)
@@ -267,23 +267,16 @@ abstract contract Exchange {
         view
         returns (uint256 markPrice, uint256 marginBps, uint256 feeBps, uint256 last, uint256 volume)
     {
-        Market storage record = _market(market);
-        return
-            (
-                record.markPrice,
-                record.marginBps,
-                record.takerFeeBps,
-                record.lastPrice,
-                record.volume
-            );
+        Market storage entry = _market(market);
+        return (entry.markPrice, entry.marginBps, entry.takerFeeBps, entry.lastPrice, entry.volume);
     }
 
     // ------------------------------------------------------------------------------------------
     // Storage hooks
     // ------------------------------------------------------------------------------------------
 
-    // Each returns a record's struct wherever the record is stored. A struct pointer goes stale
-    // when its record moves: none is held across the collateral transfers, the only external calls
+    // Each returns an entry's struct wherever the entry is stored. A struct pointer goes stale
+    // when its entry moves: none is held across the collateral transfers, the only external calls
     // that could reach a rebalance.
 
     function _account(address trader) internal view virtual returns (Account storage);
@@ -302,14 +295,14 @@ abstract contract Exchange {
     function _useHints(PagePack.Hint[] calldata hints) internal virtual;
 
     // ------------------------------------------------------------------------------------------
-    // Records located once per call
+    // Entries located once per call
     // ------------------------------------------------------------------------------------------
 
-    /// The market a call is working in, with the slots of its record and `account`'s position
+    /// The market a call is working in, with the slots of its entry and `account`'s position
     /// there, each zero until located. Without a hint every lookup searches pagepack's directory,
     /// and a call can need these many times: a settlement updates the market and the taker's
     /// position on every fill, and a re-quote reads the market's margin rate for each order.
-    /// Fills and quote updates nearly always share a market, so keeping one market's records saves
+    /// Fills and quote updates nearly always share a market, so keeping one market's entries saves
     /// most repeat lookups. `account` is the caller in a re-quote or withdrawal, and the taker in a
     /// settlement. Memory can't hold storage pointers, so this keeps slots and lays the structs
     /// back over them. Like the struct pointers, these are never held across the collateral
@@ -317,33 +310,33 @@ abstract contract Exchange {
     struct Located {
         address account;
         uint8 market;
-        uint256 record;
-        uint256 position;
+        uint256 marketSlot;
+        uint256 positionSlot;
     }
 
     function _newLocated(address account) private pure returns (Located memory located) {
         located.account = account;
     }
 
-    /// The record of `market`, located once while the call stays in that market.
+    /// The entry of `market`, located once while the call stays in that market.
     function _locateMarket(Located memory located, uint8 market)
         private
         view
-        returns (Market storage record)
+        returns (Market storage entry)
     {
         _switchMarket(located, market);
 
-        uint256 slot = located.record;
+        uint256 slot = located.marketSlot;
         if (slot == 0) {
             Market storage found = _market(market);
             assembly ("memory-safe") {
                 slot := found.slot
             }
-            located.record = slot;
+            located.marketSlot = slot;
         }
 
         assembly ("memory-safe") {
-            record.slot := slot
+            entry.slot := slot
         }
     }
 
@@ -355,13 +348,13 @@ abstract contract Exchange {
     {
         _switchMarket(located, market);
 
-        uint256 slot = located.position;
+        uint256 slot = located.positionSlot;
         if (slot == 0) {
             Position storage found = _position(located.account, market);
             assembly ("memory-safe") {
                 slot := found.slot
             }
-            located.position = slot;
+            located.positionSlot = slot;
         }
 
         assembly ("memory-safe") {
@@ -373,8 +366,8 @@ abstract contract Exchange {
         if (located.market == market) return;
 
         located.market = market;
-        located.record = 0;
-        located.position = 0;
+        located.marketSlot = 0;
+        located.positionSlot = 0;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -418,7 +411,7 @@ abstract contract Exchange {
 
     /// Settles the maker's side of a fill: the order slot, the market's trade stats, the
     /// maker's position and the release of the filled part's locked margin. Returns what the
-    /// taker's side needs. The market's record is located through `taker`, where the taker's
+    /// taker's side needs. The market's entry is located through `taker`, where the taker's
     /// side and later fills find it.
     function _fillMaker(Located memory taker, Fill calldata f)
         private
@@ -454,14 +447,14 @@ abstract contract Exchange {
     }
 
     /// Updates the market's last price and volume, and returns its margin and fee rates.
-    function _recordTrade(Market storage record, uint256 price, uint256 size)
+    function _recordTrade(Market storage entry, uint256 price, uint256 size)
         private
         returns (uint256 marginBps, uint256 feeBps)
     {
-        record.lastPrice = price.toUint64();
-        record.volume = (record.volume + size).toUint96();
+        entry.lastPrice = price.toUint64();
+        entry.volume = (entry.volume + size).toUint96();
 
-        return (record.marginBps, record.takerFeeBps);
+        return (entry.marginBps, entry.takerFeeBps);
     }
 
     function _settleMaker(
@@ -516,8 +509,8 @@ abstract contract Exchange {
     }
 
     function _credit(address account, uint256 amount) private {
-        Account storage record = _account(account);
-        record.balance = (record.balance + amount).toUint128();
+        Account storage entry = _account(account);
+        entry.balance = (entry.balance + amount).toUint128();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -525,7 +518,7 @@ abstract contract Exchange {
     // ------------------------------------------------------------------------------------------
 
     /// Cross-margin: equity across every open position must cover the margin those positions
-    /// need plus the margin locked by resting orders. Reads a position and a market record for
+    /// need plus the margin locked by resting orders. Reads a position and a market entry for
     /// each market the account is in.
     function _requireMargin(Located memory located, int256 cash, uint256 locked, uint256 markets)
         private
@@ -536,11 +529,11 @@ abstract contract Exchange {
 
         for (uint256 market; markets != 0; ++market) {
             if (markets & 1 != 0) {
-                (Position storage position, Market storage record) =
-                    _marginRecords(located, uint8(market));
+                (Position storage position, Market storage entry) =
+                    _marginEntries(located, uint8(market));
 
                 (int256 size, int256 cost) = (position.size, position.cost);
-                (uint256 markPrice, uint256 marginBps) = (record.markPrice, record.marginBps);
+                (uint256 markPrice, uint256 marginBps) = (entry.markPrice, entry.marginBps);
 
                 equity += size * int256(markPrice) - cost;
                 required += _abs(size) * markPrice * marginBps / BPS;
@@ -552,19 +545,19 @@ abstract contract Exchange {
         if (equity < int256(required)) revert InsufficientMargin(located.account);
     }
 
-    /// The account's position in `market` and the market's record. The market the call worked in
+    /// The account's position in `market` and the market's entry. The market the call worked in
     /// is located already; any other is only read here, so it doesn't replace that one.
-    function _marginRecords(Located memory located, uint8 market)
+    function _marginEntries(Located memory located, uint8 market)
         private
         view
-        returns (Position storage position, Market storage record)
+        returns (Position storage position, Market storage entry)
     {
         if (market == located.market) {
             position = _locatePosition(located, market);
-            record = _locateMarket(located, market);
+            entry = _locateMarket(located, market);
         } else {
             position = _position(located.account, market);
-            record = _market(market);
+            entry = _market(market);
         }
     }
 
@@ -576,8 +569,8 @@ abstract contract Exchange {
     {
         if (size == 0) return 0;
 
-        Market storage record = _listedMarket(_locateMarket(located, market), market);
-        return _margin(size, price, record.marginBps);
+        Market storage entry = _listedMarket(_locateMarket(located, market), market);
+        return _margin(size, price, entry.marginBps);
     }
 
     /// Margin freed by filling `filled` of an order with `remaining` left: what the order
@@ -601,15 +594,15 @@ abstract contract Exchange {
         return size * price * marginBps / BPS;
     }
 
-    /// The market's record, reverting if the market was never listed. Listing and {setMarkPrice}
+    /// The market's entry, reverting if the market was never listed. Listing and {setMarkPrice}
     /// keep a listed market's mark price nonzero.
-    function _listedMarket(Market storage record, uint8 market)
+    function _listedMarket(Market storage entry, uint8 market)
         private
         view
         returns (Market storage)
     {
-        if (record.markPrice == 0) revert UnknownMarket(market);
-        return record;
+        if (entry.markPrice == 0) revert UnknownMarket(market);
+        return entry;
     }
 
     function _abs(int256 x) private pure returns (uint256) {

@@ -55,7 +55,7 @@ in Perpl's own [page-storage explainer](https://github.com/PerplFoundation/expla
 | Orders, inside the perpetual (field 16) | order id | 1 slot each, own page |
 | Price-level pointers (field 15) and price index (fields 13, 14) | price tick | 1 slot each, own page |
 | Order-id index leaves (field 11) | order id / 256 | own page |
-| Per-account, per-perp records (account field 3) | perp id | own page |
+| Per-account, per-perp entries (account field 3) | perp id | own page |
 
 The multi-market re-quote reads the perpetual struct and the position for **all six markets**
 the account trades, because margin is checked across them. That is 12 pages before the order
@@ -66,11 +66,11 @@ itself is touched.
 Perpl's explainer concludes that MIP-8 is a marginal win, about 4% across its own gas suite,
 because single-slot positions, orders and order locks "each hash to their own scattered page",
 which it calls a floor that page-ification cannot lower. That floor is a consequence of keying
-every record by hash. It is not a property of the data:
+every entry by hash. It is not a property of the data:
 
-- **The same accounts touch the same records all the time.** In the sample, three accounts sent
-  three quarters of the orders. Their accounts, positions, order records and locks could share a
-  page or two each, instead of one page per record.
+- **The same accounts touch the same entries all the time.** In the sample, three accounts sent
+  three quarters of the orders. Their accounts, positions, order entries and locks could share a
+  page or two each, instead of one page per entry.
 - **Margin checks read every market an account holds.** Putting each market's hot header slots
   on one shared page turns six page loads into one.
 - **Order ids are already reused.** Allocating each account's orders within a block of ids, or
@@ -86,7 +86,7 @@ with hints) and the 14-maker fill by 41% (48% with hints).
 These are the model's savings, not Perpl's. Perpl's transactions touch several times more pages
 than the model, so it may save more in absolute terms, but that is a hypothesis: the extra pages
 hold state the model doesn't have, such as the order-book index, price levels and funding, which
-may not consolidate the way account records do.
+may not consolidate the way account entries do.
 
 ## Sample
 

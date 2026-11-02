@@ -1,9 +1,9 @@
 {
-  "1-slot records": "935550",
-  "1-slot records, home-hint map": "944197",
-  "1-slot records, never written": "608894",
-  "1-slot records, never written, home-hint map": "934341",
-  "3-slot records": "1511693",
-  "8-slot records": "2975175",
-  "8-slot records, 1 slot set": "1002183"
+  "1-slot entries": "935550",
+  "1-slot entries, home-hint map": "944197",
+  "1-slot entries, never written": "608894",
+  "1-slot entries, never written, home-hint map": "934341",
+  "3-slot entries": "1511693",
+  "8-slot entries": "2975175",
+  "8-slot entries, 1 slot set": "1002183"
 }

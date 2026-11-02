@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {PagePack, Record} from "pagepack/PagePack.sol";
+import {Entry, PagePack} from "pagepack/PagePack.sol";
 import {Loan, LoanMap, loanKey, loanMap} from "../../examples/loans/LoanMap.sol";
 
 /// The typed map example: Loans looked up by id in a map as wide as the struct.
@@ -11,10 +11,10 @@ contract LoanMapTest is Test {
 
     function test_widthComesFromTheStruct() public view {
         assertEq(LOANS.map().width(), 2);
-        assertEq(LOANS.map().recordsPerPage(), 42);
+        assertEq(LOANS.map().entriesPerPage(), 42);
     }
 
-    function test_fieldsLandInTheLoansRecord() public {
+    function test_fieldsLandInTheLoansEntry() public {
         Loan storage loan = LOANS.find(7);
         loan.borrower = address(0xBEEF);
         loan.openedAt = 100;
@@ -22,9 +22,9 @@ contract LoanMapTest is Test {
         loan.principal = 1_000;
         loan.interest = 3;
 
-        Record r = LOANS.map().find(loanKey(7));
-        assertEq(r.read(0), uint256(uint160(address(0xBEEF))) | (100 << 160) | (500 << 224));
-        assertEq(r.read(1), 1_000 | (3 << 128));
+        Entry e = LOANS.map().find(loanKey(7));
+        assertEq(e.read(0), uint256(uint160(address(0xBEEF))) | (100 << 160) | (500 << 224));
+        assertEq(e.read(1), 1_000 | (3 << 128));
     }
 
     function test_loanIdIsTheKey() public pure {
@@ -37,7 +37,7 @@ contract LoanMapTest is Test {
 
         _pack(1, 2);
 
-        // Packed side by side: each record is an identity word plus two data slots.
+        // Packed side by side: each entry is an identity word plus two data slots.
         assertEq(_slot(2), _slot(1) + 3);
         assertEq(LOANS.map().hintOf(loanKey(2)), 2);
 

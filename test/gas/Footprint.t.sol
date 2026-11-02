@@ -9,7 +9,7 @@ import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 /// Counts the storage each layout leaves behind for 512 nonzero one-slot balances: live slots,
 /// and the pages they occupy. These are logical counts of nonzero slots, not node database bytes.
 contract FootprintTest is Test {
-    uint256 internal constant RECORDS = 512;
+    uint256 internal constant ENTRIES = 512;
 
     function test_footprint_mapping() public {
         MappingBalances balances = new MappingBalances();
@@ -84,9 +84,9 @@ contract FootprintTest is Test {
     }
 
     function _keys() internal pure returns (bytes32[] memory keys) {
-        keys = new bytes32[](RECORDS);
+        keys = new bytes32[](ENTRIES);
 
-        for (uint256 i; i < RECORDS; ++i) {
+        for (uint256 i; i < ENTRIES; ++i) {
             keys[i] = keccak256(abi.encode("footprint", i));
         }
     }
@@ -94,9 +94,9 @@ contract FootprintTest is Test {
     /// Packed back to back from index 0: eight full pages of 64.
     function _layout() internal pure returns (PagePack.Placement[] memory placements) {
         bytes32[] memory keys = _keys();
-        placements = new PagePack.Placement[](RECORDS);
+        placements = new PagePack.Placement[](ENTRIES);
 
-        for (uint256 i; i < RECORDS; ++i) {
+        for (uint256 i; i < ENTRIES; ++i) {
             placements[i] = PagePack.Placement(keys[i], i);
         }
     }

@@ -31,7 +31,7 @@ cat > "$consumer/src/Consumer.sol" <<'SOL'
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 import {LoanMap, loanMap} from "./LoanMap.sol";
 
 contract Consumer {
@@ -47,7 +47,7 @@ contract Consumer {
     }
 
     function credit(bytes32 key, uint256 amount) external {
-        Record balance = BALANCES.find(key);
+        Entry balance = BALANCES.find(key);
         balance.write(0, balance.read(0) + amount);
     }
 }

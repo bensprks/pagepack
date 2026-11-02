@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {PagePack, PagedMap} from "pagepack/PagePack.sol";
 
 /// Exposes PagePack over a single map so tests can drive it through external calls.
-contract RecordStore {
+contract EntryStore {
     PagedMap public immutable MAP;
 
     constructor(uint256 slots, bool homeHints) {
@@ -59,8 +59,8 @@ contract RecordStore {
         return MAP.packedCount();
     }
 
-    function recordsPerPage() external view returns (uint256) {
-        return MAP.recordsPerPage();
+    function entriesPerPage() external view returns (uint256) {
+        return MAP.entriesPerPage();
     }
 
     function rebalance(bytes32[] memory evictions, PagePack.Placement[] memory placements)

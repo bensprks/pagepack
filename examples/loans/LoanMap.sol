@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 
 // A typed map: Loans stored by pagepack and looked up by loan id. Copy this file for each kind of
-// record, renaming the struct, the key and the functions:
+// entry, renaming the struct, the key and the functions:
 //
 //     LoanMap internal immutable LOANS = loanMap("app.loans");
 //
@@ -14,7 +14,7 @@ import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
 // underlying map: `LOANS.map().useHints(hints)`, with keys from `loanKey`.
 
 /// Two slots: borrower, openedAt and rateBps share slot 0, and principal and interest share
-/// slot 1. Fixed-size fields only: a record's location changes when it is packed.
+/// slot 1. Fixed-size fields only: an entry's location changes when it is packed.
 struct Loan {
     address borrower;
     uint64 openedAt;
@@ -27,19 +27,19 @@ type LoanMap is bytes32;
 
 using {find, map} for LoanMap global;
 
-/// Creates a map whose records are as wide as a Loan.
+/// Creates a map whose entries are as wide as a Loan.
 /// @dev Intended for an immutable. Reverts if Loan grows past 127 slots.
 function loanMap(string memory name) view returns (LoanMap) {
     return LoanMap.wrap(PagedMap.unwrap(PagePack.map(name, _loanSlots())));
 }
 
-/// The loan's record, wherever it currently lives. Look it up again after anything that could
+/// The loan's entry, wherever it currently lives. Look it up again after anything that could
 /// rebalance.
 function find(LoanMap loans, uint256 loanId) view returns (Loan storage loan) {
-    Record r = loans.map().find(loanKey(loanId));
+    Entry e = loans.map().find(loanKey(loanId));
 
     assembly ("memory-safe") {
-        loan.slot := r
+        loan.slot := e
     }
 }
 

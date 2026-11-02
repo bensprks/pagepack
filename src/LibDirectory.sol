@@ -5,14 +5,14 @@ import {LibSort} from "./utils/LibSort.sol";
 
 /// @title LibDirectory
 /// @notice The directory of a PagePack map: one page mapping a short fingerprint of every packed
-///         record to its packed index.
+///         entry to its packed index.
 ///
 /// Layout, from a page-aligned slot `dir`:
 ///
 ///   dir + 0              number of entries
 ///   dir + 1 .. dir + 127 entries, 8 per slot, the first in the lowest 32 bits
 ///
-/// An entry is 32 bits: a 22-bit fingerprint (the top bits of the record's identity) above a
+/// An entry is 32 bits: a 22-bit fingerprint (the top bits of the packed entry's identity) above a
 /// 10-bit packed index. Entries are kept sorted, which sorts them by fingerprint, and no two share
 /// a fingerprint.
 library LibDirectory {
@@ -45,7 +45,7 @@ library LibDirectory {
         return _load(dir);
     }
 
-    /// @notice The fingerprint the directory keeps for a record identity.
+    /// @notice The fingerprint the directory keeps for an entry identity.
     function fingerprintOf(uint256 id) internal pure returns (uint256) {
         return id >> FINGERPRINT_SHIFT;
     }
@@ -168,11 +168,11 @@ library LibDirectory {
 
     /// @notice Rewrites the directory without the entries at the positions marked in `removed`
     ///         (`removedCount` of them) and with `insertions`, each a {taggedEntry}, merged in.
-    ///         Two records with the same fingerprint can't both be listed, because lookups could
+    ///         Two entries with the same fingerprint can't both be listed, because lookups could
     ///         not tell them apart: on a clash nothing is written, and the tags of both entries
     ///         come back, ~0 for an entry already stored. The caller checks capacity first.
     /// @dev Sorts `insertions` in place. The sort returns early on sorted input, so listing new
-    ///      records in fingerprint order saves gas.
+    ///      entries in fingerprint order saves gas.
     function rebuild(
         uint256 dir,
         uint256[4] memory removed,
@@ -213,7 +213,7 @@ library LibDirectory {
     }
 
     /// Merges the stored entries, minus removed ones, with the sorted insertions, packing the
-    /// result 8 to a word into `merged`. Two records with the same fingerprint can't both be
+    /// result 8 to a word into `merged`. Two entries with the same fingerprint can't both be
     /// packed, because lookups could not tell them apart, so a clash stops the merge and reports
     /// the tags of both entries (~0 for a stored one).
     ///

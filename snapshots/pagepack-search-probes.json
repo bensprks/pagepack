@@ -1,8 +1,8 @@
 {
-  "1016 packed, packed record": "194",
-  "1016 packed, record at home": "196",
-  "512 packed, packed record": "181",
-  "512 packed, record at home": "192",
-  "64 packed, packed record": "125",
-  "64 packed, record at home": "133"
+  "1016 packed, entry at home": "196",
+  "1016 packed, packed entry": "194",
+  "512 packed, entry at home": "192",
+  "512 packed, packed entry": "181",
+  "64 packed, entry at home": "133",
+  "64 packed, packed entry": "125"
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 
 /// Baseline: one Solidity mapping entry per balance.
 contract MappingBalances {
@@ -20,7 +20,7 @@ contract MappingBalances {
     }
 }
 
-/// The same balances stored as one-slot PagePack records.
+/// The same balances stored as one-slot PagePack entries.
 contract PackedBalances {
     PagedMap internal immutable BALANCES;
 
@@ -50,15 +50,15 @@ contract PackedBalances {
 
     function bump(bytes32[] calldata keys) external {
         for (uint256 i; i < keys.length; ++i) {
-            Record r = BALANCES.find(keys[i]);
-            r.write(0, r.read(0) + 1);
+            Entry e = BALANCES.find(keys[i]);
+            e.write(0, e.read(0) + 1);
         }
     }
 
     function bump(bytes32[] calldata keys, uint256[] calldata hints) external {
         for (uint256 i; i < keys.length; ++i) {
-            Record r = BALANCES.find(keys[i], hints[i]);
-            r.write(0, r.read(0) + 1);
+            Entry e = BALANCES.find(keys[i], hints[i]);
+            e.write(0, e.read(0) + 1);
         }
     }
 }

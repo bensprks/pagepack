@@ -3,7 +3,7 @@
 Each row's percentages are relative to the first column that has a value for that row, or to
 the first row when a table sets compare_to_first_row. Tables whose columns aren't alternatives,
 such as directory sizes, set percentages to False. A table can set divide_by to show each value
-per item, e.g. per record when a benchmark packs several at once. A column can name a third
+per item, e.g. per entry when a benchmark packs several at once. A column can name a third
 value, a scale for snapshots kept in hundredths, which it shows with two decimals.
 
 Usage: python3 test/gas/report.py [snapshots-dir]
@@ -15,26 +15,26 @@ from pathlib import Path
 
 TABLES = [
     {
-        "title": "Library: updating existing one-slot records in one transaction",
-        "label": "Records updated",
+        "title": "Library: updating existing one-slot entries in one transaction",
+        "label": "Entries updated",
         "columns": [
             ("Mapping", "mapping"),
             ("pagepack, no hint", "pagepack"),
             ("pagepack, hinted", "pagepack-hinted"),
         ],
         "rows": [
-            "1 record",
-            "2 records",
-            "10 records",
-            "30 records",
-            "30 records, 3 pages",
-            "2 unpacked records",
-            "2 unpacked records, home-hint map",
+            "1 entry",
+            "2 entries",
+            "10 entries",
+            "30 entries",
+            "30 entries, 3 pages",
+            "2 unpacked entries",
+            "2 unpacked entries, home-hint map",
         ],
     },
     {
         "title": "Library: directory search, page already loaded (1,024 searches each)",
-        "label": "Directory and record",
+        "label": "Directory and entry",
         "columns": [
             ("Probes, mean", "pagepack-search-probes", 100),
             ("Probes, max", "pagepack-search-probes-max"),
@@ -43,22 +43,22 @@ TABLES = [
         ],
         "percentages": False,
         "rows": [
-            "64 packed, packed record",
-            "64 packed, record at home",
-            "512 packed, packed record",
-            "512 packed, record at home",
-            "1016 packed, packed record",
-            "1016 packed, record at home",
+            "64 packed, packed entry",
+            "64 packed, entry at home",
+            "512 packed, packed entry",
+            "512 packed, entry at home",
+            "1016 packed, packed entry",
+            "1016 packed, entry at home",
         ],
     },
     {
         "title": "Library: rebalancing",
         "label": "Operation",
         "columns": [("pagepack", "pagepack-rebalance")],
-        "rows": ["Move a 3-slot record within a page"],
+        "rows": ["Move a 3-slot entry within a page"],
     },
     {
-        "title": "Library: rebalancing by number of packed records (one-slot records)",
+        "title": "Library: rebalancing by number of packed entries (one-slot entries)",
         "label": "Operation",
         "columns": [
             ("64", "pagepack-rebalance-64"),
@@ -69,31 +69,31 @@ TABLES = [
         "rows": [
             "Empty rebalance",
             "Resubmit the whole layout",
-            "Move one record",
-            "Swap two records",
-            "Evict one record",
-            "Replace one record with another",
-            "Pack every record",
+            "Move one entry",
+            "Swap two entries",
+            "Evict one entry",
+            "Replace one entry with another",
+            "Pack every entry",
         ],
     },
     {
-        "title": "Library: packing records from home, per record (16 per call)",
-        "label": "Record shape",
+        "title": "Library: packing entries from home, per entry (16 per call)",
+        "label": "Entry shape",
         "columns": [("pagepack", "pagepack-packing")],
         "percentages": False,
         "divide_by": 16,
         "rows": [
-            "1-slot records",
-            "3-slot records",
-            "8-slot records",
-            "8-slot records, 1 slot set",
-            "1-slot records, never written",
-            "1-slot records, home-hint map",
-            "1-slot records, never written, home-hint map",
+            "1-slot entries",
+            "3-slot entries",
+            "8-slot entries",
+            "8-slot entries, 1 slot set",
+            "1-slot entries, never written",
+            "1-slot entries, home-hint map",
+            "1-slot entries, never written, home-hint map",
         ],
     },
     {
-        "title": "Library: storage left by 512 nonzero one-slot records",
+        "title": "Library: storage left by 512 nonzero one-slot entries",
         "label": "Layout",
         "columns": [
             ("Live storage slots", "footprint-slots"),
