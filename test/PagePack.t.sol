@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {PagePack, Space} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap} from "pagepack/PagePack.sol";
 import {RecordStore} from "./utils/RecordStore.sol";
 
 /// Loads hints in one call to the store and looks a record up in another, as a contract would
@@ -125,7 +125,7 @@ contract PagePackTest is Test {
         _assertFilled(key, 10);
     }
 
-    function test_defaultSpaceKeepsNoFlagsAndIgnoresHomeHints() public {
+    function test_defaultMapKeepsNoFlagsAndIgnoresHomeHints() public {
         bytes32 a = _key(1);
         bytes32 b = _key(2);
         _fill(a, 10);
@@ -144,36 +144,36 @@ contract PagePackTest is Test {
         _assertFilled(a, 10);
     }
 
-    function test_homeHintSpacesHaveTheirOwnStorage() public {
+    function test_homeHintMapsHaveTheirOwnStorage() public {
         RecordStore plain = new RecordStore(3, false);
         RecordStore hinted = new RecordStore(3, true);
-        uint256 plainSpace = uint256(Space.unwrap(plain.SPACE()));
-        uint256 hintedSpace = uint256(Space.unwrap(hinted.SPACE()));
+        uint256 plainMap = uint256(PagedMap.unwrap(plain.MAP()));
+        uint256 hintedMap = uint256(PagedMap.unwrap(hinted.MAP()));
 
         // Same name and width; only the mode bit differs, which moves every slot.
-        assertEq(plainSpace & 0x7f, 3);
-        assertEq(hintedSpace & 0x7f, 3);
-        assertEq(plainSpace ^ hintedSpace, 0x80);
+        assertEq(plainMap & 0x7f, 3);
+        assertEq(hintedMap & 0x7f, 3);
+        assertEq(plainMap ^ hintedMap, 0x80);
         assertEq(plain.recordsPerPage(), hinted.recordsPerPage());
     }
 
     function test_widestRecordsLeaveRoomForFlag() public {
-        uint256 words = PagePack.MAX_WIDTH;
-        RecordStore widest = new RecordStore(words, true);
+        uint256 slots = PagePack.MAX_WIDTH;
+        RecordStore widest = new RecordStore(slots, true);
         bytes32 key = _key(1);
 
-        for (uint256 i; i < words; ++i) {
+        for (uint256 i; i < slots; ++i) {
             widest.set(key, i, i + 1);
         }
 
         widest.rebalance(_noKeys(), _placement(key, 0));
         widest.rebalance(_keys(key), _noPlacements());
 
-        for (uint256 i; i < words; ++i) {
+        for (uint256 i; i < slots; ++i) {
             assertEq(widest.get(key, i, PagePack.HOME), i + 1);
         }
 
-        uint256 home = uint256(keccak256(abi.encode(widest.SPACE(), key))) & ~uint256(127);
+        uint256 home = uint256(keccak256(abi.encode(widest.MAP(), key))) & ~uint256(127);
         assertEq(uint256(vm.load(address(widest), bytes32(home + 127))), 0);
     }
 
@@ -739,7 +739,7 @@ contract PagePackTest is Test {
     }
 
     function _identity(bytes32 key) internal view returns (uint256) {
-        return uint256(keccak256(abi.encode(store.SPACE(), key)));
+        return uint256(keccak256(abi.encode(store.MAP(), key)));
     }
 
     function _home(bytes32 key) internal view returns (uint256) {
@@ -747,7 +747,7 @@ contract PagePackTest is Test {
     }
 
     function _directory() internal view returns (uint256) {
-        return uint256(keccak256(abi.encode(store.SPACE()))) & ~uint256(127);
+        return uint256(keccak256(abi.encode(store.MAP()))) & ~uint256(127);
     }
 
     function _assertNotRead(bytes32[] memory reads, uint256 location) internal pure {
@@ -769,7 +769,7 @@ contract PagePackTest is Test {
         return _identity(key) >> 234;
     }
 
-    /// Writes value, value + 1, value + 2 into the record's three words.
+    /// Writes value, value + 1, value + 2 into the record's three slots.
     function _fill(bytes32 key, uint256 value) internal {
         for (uint256 i; i < 3; ++i) {
             store.set(key, i, value + i);
@@ -822,7 +822,7 @@ contract PagePackTest is Test {
         }
     }
 
-    /// Returns `count` keys with distinct fingerprints in the current store's space.
+    /// Returns `count` keys with distinct fingerprints in the current store's map.
     function _uniqueKeys(uint256 count) internal returns (bytes32[] memory keys) {
         keys = new bytes32[](count);
         uint256 found;

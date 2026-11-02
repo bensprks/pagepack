@@ -15,7 +15,7 @@ from pathlib import Path
 
 TABLES = [
     {
-        "title": "Library: updating existing one-word records in one transaction",
+        "title": "Library: updating existing one-slot records in one transaction",
         "label": "Records updated",
         "columns": [
             ("Mapping", "mapping"),
@@ -29,7 +29,7 @@ TABLES = [
             "30 records",
             "30 records, 3 pages",
             "2 unpacked records",
-            "2 unpacked records, home-hint space",
+            "2 unpacked records, home-hint map",
         ],
     },
     {
@@ -55,10 +55,10 @@ TABLES = [
         "title": "Library: rebalancing",
         "label": "Operation",
         "columns": [("pagepack", "pagepack-rebalance")],
-        "rows": ["Move a 3-word record within a page"],
+        "rows": ["Move a 3-slot record within a page"],
     },
     {
-        "title": "Library: rebalancing by number of packed records (one-word records)",
+        "title": "Library: rebalancing by number of packed records (one-slot records)",
         "label": "Operation",
         "columns": [
             ("64", "pagepack-rebalance-64"),
@@ -83,20 +83,20 @@ TABLES = [
         "percentages": False,
         "divide_by": 16,
         "rows": [
-            "1-word records",
-            "3-word records",
-            "8-word records",
-            "8-word records, 1 word set",
-            "1-word records, never written",
-            "1-word records, home-hint space",
-            "1-word records, never written, home-hint space",
+            "1-slot records",
+            "3-slot records",
+            "8-slot records",
+            "8-slot records, 1 slot set",
+            "1-slot records, never written",
+            "1-slot records, home-hint map",
+            "1-slot records, never written, home-hint map",
         ],
     },
     {
-        "title": "Library: storage left by 512 nonzero one-word records",
+        "title": "Library: storage left by 512 nonzero one-slot records",
         "label": "Layout",
         "columns": [
-            ("Live storage words", "footprint-words"),
+            ("Live storage slots", "footprint-slots"),
             ("Occupied pages", "footprint-pages"),
         ],
         "percentages": False,
@@ -123,9 +123,9 @@ TABLES = [
         ],
     },
     {
-        "title": "Exchange example: taker vs 14 makers without hints, by space name",
-        "label": "Space name",
-        "columns": [("pagepack", "exchange-space-names")],
+        "title": "Exchange example: taker vs 14 makers without hints, by map name",
+        "label": "Map name",
+        "columns": [("pagepack", "exchange-map-names")],
         "percentages": False,
         "rows": [
             "pagepack.exchange",

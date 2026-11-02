@@ -10,7 +10,7 @@ import {RecordStore} from "../utils/RecordStore.sol";
 /// broken ones; the model decides independently which should succeed.
 contract RebalanceHandler is Test {
     uint256 public constant KEYS = 40;
-    uint256 public constant WORDS = 2;
+    uint256 public constant WIDTH = 2;
 
     // Spread over three packed pages and up to five directory words.
     uint256 public constant INDICES = 100;
@@ -21,7 +21,7 @@ contract RebalanceHandler is Test {
     // The model: each key's packed index plus one (0 at home), the reverse, and the data.
     uint256[KEYS] public indexOf;
     uint256[INDICES] internal keyAt;
-    uint256[WORDS][KEYS] internal values;
+    uint256[WIDTH][KEYS] internal values;
 
     uint256 public packed;
     uint256 public accepted;
@@ -48,10 +48,10 @@ contract RebalanceHandler is Test {
     // Actions
     // ------------------------------------------------------------------------------------------
 
-    /// Writes a word, zero a quarter of the time so rebalances also move empty words.
+    /// Writes a data slot, zero a quarter of the time so rebalances also move empty slots.
     function write(uint256 k, uint256 w, uint256 value) external {
         k %= KEYS;
-        w %= WORDS;
+        w %= WIDTH;
         if (value % 4 == 0) value = 0;
 
         store.set(keys[k], w, value);
@@ -238,7 +238,7 @@ contract RebalanceHandler is Test {
     }
 }
 
-/// Runs once per kind of space: with home flags and HOME hints, and without.
+/// Runs once per kind of map: with home flags and HOME hints, and without.
 abstract contract RebalanceInvariantTest is Test {
     RecordStore internal store;
     RebalanceHandler internal handler;
@@ -273,7 +273,7 @@ abstract contract RebalanceInvariantTest is Test {
     }
 
     /// Every record holds its data and is found where the model says, by every kind of lookup.
-    /// Spaces without home flags never write one and ignore HOME hints.
+    /// Maps without home flags never write one and ignore HOME hints.
     function invariant_recordsMatchModel() public view {
         assertEq(store.packedCount(), handler.packed());
 
@@ -285,7 +285,7 @@ abstract contract RebalanceInvariantTest is Test {
             assertEq(store.hintOf(key), hint, "hint");
             assertEq(_flag(key), index != 0 && homeHints() ? 1 : 0, "packed flag");
 
-            for (uint256 w; w < handler.WORDS(); ++w) {
+            for (uint256 w; w < handler.WIDTH(); ++w) {
                 uint256 expected = handler.valueOf(k, w);
 
                 assertEq(store.get(key, w), expected, "no hint");
@@ -296,7 +296,7 @@ abstract contract RebalanceInvariantTest is Test {
     }
 
     function _flag(bytes32 key) internal view returns (uint256) {
-        uint256 home = uint256(keccak256(abi.encode(store.SPACE(), key))) & ~uint256(127);
+        uint256 home = uint256(keccak256(abi.encode(store.MAP(), key))) & ~uint256(127);
         return uint256(vm.load(address(store), bytes32(home + 127)));
     }
 }

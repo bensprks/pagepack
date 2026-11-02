@@ -1,41 +1,41 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, Space} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap} from "pagepack/PagePack.sol";
 
-/// Exposes PagePack over a single space so tests can drive it through external calls.
+/// Exposes PagePack over a single map so tests can drive it through external calls.
 contract RecordStore {
-    Space public immutable SPACE;
+    PagedMap public immutable MAP;
 
-    constructor(uint256 words, bool homeHints) {
-        SPACE = homeHints
-            ? PagePack.spaceWithHomeHints("pagepack.test", words)
-            : PagePack.space("pagepack.test", words);
+    constructor(uint256 slots, bool homeHints) {
+        MAP = homeHints
+            ? PagePack.mapWithHomeHints("pagepack.test", slots)
+            : PagePack.map("pagepack.test", slots);
     }
 
     function get(bytes32 key, uint256 offset) external view returns (uint256) {
-        return SPACE.find(key).read(offset);
+        return MAP.find(key).read(offset);
     }
 
     function get(bytes32 key, uint256 offset, uint256 hint) external view returns (uint256) {
-        return SPACE.find(key, hint).read(offset);
+        return MAP.find(key, hint).read(offset);
     }
 
     function set(bytes32 key, uint256 offset, uint256 value) external {
-        SPACE.find(key).write(offset, value);
+        MAP.find(key).write(offset, value);
     }
 
     function slotOf(bytes32 key) external view returns (uint256) {
-        return SPACE.find(key).slot();
+        return MAP.find(key).slot();
     }
 
     function slotOf(bytes32 key, uint256 hint) external view returns (uint256) {
-        return SPACE.find(key, hint).slot();
+        return MAP.find(key, hint).slot();
     }
 
     /// Loads hints for the rest of the transaction.
     function useHints(PagePack.Hint[] calldata hints) external {
-        SPACE.useHints(hints);
+        MAP.useHints(hints);
     }
 
     /// Loads hints, then looks `key` up without one, all in one call.
@@ -43,29 +43,29 @@ contract RecordStore {
         external
         returns (uint256)
     {
-        SPACE.useHints(hints);
-        return SPACE.find(key).slot();
+        MAP.useHints(hints);
+        return MAP.find(key).slot();
     }
 
     function hintOf(bytes32 key) external view returns (uint256) {
-        return SPACE.hintOf(key);
+        return MAP.hintOf(key);
     }
 
     function fingerprintOf(bytes32 key) external view returns (uint256) {
-        return SPACE.fingerprintOf(key);
+        return MAP.fingerprintOf(key);
     }
 
     function packedCount() external view returns (uint256) {
-        return SPACE.packedCount();
+        return MAP.packedCount();
     }
 
     function recordsPerPage() external view returns (uint256) {
-        return SPACE.recordsPerPage();
+        return MAP.recordsPerPage();
     }
 
     function rebalance(bytes32[] memory evictions, PagePack.Placement[] memory placements)
         external
     {
-        SPACE.rebalance(evictions, placements);
+        MAP.rebalance(evictions, placements);
     }
 }

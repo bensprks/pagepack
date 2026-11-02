@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {PagePack} from "pagepack/PagePack.sol";
 import {RecordStore} from "../utils/RecordStore.sol";
 
-/// Measures rebalancing as the directory fills up. Records are one word wide, so 64 share a
+/// Measures rebalancing as the directory fills up. Records are one slot wide, so 64 share a
 /// page, and every record starts packed at the index matching its key's number. Each test is its
 /// own transaction, so every page starts cold.
 abstract contract RebalanceScaleGasTest is Test {
@@ -24,7 +24,7 @@ abstract contract RebalanceScaleGasTest is Test {
         // One spare key to swap in. Keys must have distinct fingerprints to be packed together.
         for (uint256 i; keys.length < size() + 1; ++i) {
             bytes32 key = keccak256(abi.encode("scale", i));
-            uint256 fingerprint = uint256(keccak256(abi.encode(store.SPACE(), key))) >> 234;
+            uint256 fingerprint = uint256(keccak256(abi.encode(store.MAP(), key))) >> 234;
 
             if (seen[fingerprint]) continue;
 

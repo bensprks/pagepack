@@ -28,10 +28,10 @@ cat > "$consumer/src/Consumer.sol" <<'SOL'
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, Record, Space} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
 
 contract Consumer {
-    Space internal immutable BALANCES = PagePack.space("consumer.balances", 1);
+    PagedMap internal immutable BALANCES = PagePack.map("consumer.balances", 1);
 
     function balanceOf(bytes32 key) external view returns (uint256) {
         return BALANCES.find(key).read(0);

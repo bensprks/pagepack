@@ -12,7 +12,7 @@ contract RebalanceGasTest is Test {
     RecordStore internal store;
 
     function setUp() public {
-        // Three data words plus an identity word: 32 records per page.
+        // Three data slots plus an identity word: 32 records per page.
         store = new RecordStore(3, false);
 
         for (uint256 i; i < 3; ++i) {
@@ -26,7 +26,7 @@ contract RebalanceGasTest is Test {
     /// occupied replaces one that was cleared on the same page.
     function test_gas_moveWithinPage() public {
         _place(1);
-        vm.snapshotGasLastCall("pagepack-rebalance", "Move a 3-word record within a page");
+        vm.snapshotGasLastCall("pagepack-rebalance", "Move a 3-slot record within a page");
 
         assertEq(store.hintOf(KEY), 2);
 

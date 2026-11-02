@@ -15,11 +15,11 @@ library: contracts only ever see its output, a list of placements passed to `reb
 3. **Pack.** Group records into pages to minimise pages touched per transaction. Frequency
    packing is the baseline; co-access clustering is the experiment. Earlier mainnet data showed
    frequency packing is hard to beat, so both are reported against held-out transactions.
-4. **Emit.** Write a layout file per space:
+4. **Emit.** Write a layout file per map:
 
 ```json
 {
-  "space": "example.ledger",
+  "map": "example.balances",
   "recordsPerPage": 64,
   "placements": [{ "key": "0x…", "index": 0 }]
 }

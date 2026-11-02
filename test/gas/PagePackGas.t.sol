@@ -11,7 +11,7 @@ import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 ///
 /// Layout: bench keys 0-29 sit together on one packed page, keys 30-59 are spread over three
 /// pages, keys 60+ are never packed, and 400 filler records give the directory a realistic depth.
-/// A second copy in a home-hint space measures HOME hints for the records that aren't packed.
+/// A second copy in a home-hint map measures HOME hints for the records that aren't packed.
 contract PagePackGasTest is Test {
     uint256 internal constant FILLER = 400;
     uint256 internal constant RECORDS_PER_PAGE = 64;
@@ -134,15 +134,15 @@ contract PagePackGasTest is Test {
     }
 
     function test_gas_mapping_unpacked_home_2() public {
-        _bumpMapping("2 unpacked records, home-hint space", 60, 2);
+        _bumpMapping("2 unpacked records, home-hint map", 60, 2);
     }
 
     function test_gas_packed_unpacked_home_2() public {
-        _bumpPacked(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+        _bumpPacked(homeHintBalances, "2 unpacked records, home-hint map", 60, 2);
     }
 
     function test_gas_hinted_unpacked_home_2() public {
-        _bumpHinted(homeHintBalances, "2 unpacked records, home-hint space", 60, 2);
+        _bumpHinted(homeHintBalances, "2 unpacked records, home-hint map", 60, 2);
     }
 
     // ------------------------------------------------------------------------------------------

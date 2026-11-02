@@ -11,7 +11,7 @@ that are used together onto shared pages, so the same transaction pays for one o
 
 ## Results
 
-Updating existing one-word balances in one transaction, Monad gas schedule, from `make gas`:
+Updating existing one-slot balances in one transaction, Monad gas schedule, from `make gas`:
 
 | Records updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
@@ -21,12 +21,12 @@ Updating existing one-word balances in one transaction, Monad gas schedule, from
 | 30 records | 375,029 | 124,818 (-67%) | 82,441 (-78%) |
 | 30 records, 3 pages | 375,065 | 144,189 (-62%) | 104,437 (-72%) |
 | 2 unpacked records | 45,333 | 55,828 (+23%) | – |
-| 2 unpacked records, home-hint space | 45,333 | 56,417 (+24%) | 47,895 (+6%) |
+| 2 unpacked records, home-hint map | 45,333 | 56,417 (+24%) | 47,895 (+6%) |
 
 The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
 settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-record writes and
 records that were never packed cost more than a mapping, because finding a record costs gas too.
-In a space that keeps home flags, a hint brings a record that was never packed within 6% of a
+In a map that keeps home flags, a hint brings a record that was never packed within 6% of a
 mapping entry, at a storage cost described under [Planning layouts](#planning-layouts).
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
@@ -36,7 +36,7 @@ dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker 
 ## How it works
 
 ```
-  directory: one page per space
+  directory: one page per map
   ┌───────┬─────────┬─────────┬─────┬─────────┐
   │ count │ entry 0 │ entry 1 │ ... │ entry n │   entry = fingerprint → packed index,
   └───────┴─────────┴─────────┴─────┴─────────┘   sorted by fingerprint, 8 per slot
@@ -44,23 +44,23 @@ dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker 
   packed pages: records used together, side by side
   ┌────┬──────┬────┬──────┬─────┬────┬──────┬────────┐
   │ id │ data │ id │ data │ ... │ id │ data │ unused │   floor(128 / (width + 1)) records
-  └────┴──────┴────┴──────┴─────┴────┴──────┴────────┘   per page: 42 for two-word records
+  └────┴──────┴────┴──────┴─────┴────┴──────┴────────┘   per page: 42 for two-slot records
    index 0     index 1           index 41
 
-  home pages: one per record at keccak256(space, key), like a mapping entry
+  home pages: one per record at keccak256(map, key), like a mapping entry
   ┌──────┬──────────────────────────────────────┬──────┐
   │ data │ unused                               │ flag │   data until the record is packed;
-  └──────┴──────────────────────────────────────┴──────┘   flag while packed (home-hint spaces)
+  └──────┴──────────────────────────────────────┴──────┘   flag while packed (home-hint maps)
 ```
 
-- **Spaces.** A space is a family of fixed-width records (say, one-word balances). Records only
-  share pages with records in the same space, so put entities used together in one space.
+- **Maps.** A map holds fixed-width records by key (say, one-slot balances). Records only
+  share pages with records in the same map, so put entities used together in one map.
 - **Home and packed locations.** Every record starts on its home page, derived from its key. An
   admin calls `rebalance` to move hot records into numbered slots on packed pages. A record is
-  never split across pages. In a home-hint space, a flag on the home page marks it as packed.
-- **Identity words.** Each packed record is stored with its identity, `keccak256(space, key)`,
+  never split across pages. In a home-hint map, a flag on the home page marks it as packed.
+- **Identity words.** Each packed record is stored with its identity, `keccak256(map, key)`,
   so any lookup can confirm it found the right record. Stale data can't be returned.
-- **Directory.** One page per space lists a 22-bit fingerprint and packed index for up to 1,016
+- **Directory.** One page per map lists a 22-bit fingerprint and packed index for up to 1,016
   records, 8 to a storage word. The fingerprints are evenly spread hash bits, so a search can
   guess which word to read and usually settles in one or two reads.
 
@@ -95,8 +95,8 @@ dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker 
 ```
 
 `find(key)` checks a hint first if there is one. A packed record's hint is its index plus one,
-checked against the identity word. In a home-hint space, a record that isn't packed has the hint
-`HOME`, checked against its packed flag, so it costs what a mapping entry does; other spaces
+checked against the identity word. In a home-hint map, a record that isn't packed has the hint
+`HOME`, checked against its packed flag, so it costs what a mapping entry does; other maps
 ignore `HOME`. Without a hint, or with a wrong one, the lookup searches the directory, loading
 that page once per transaction. Every path ends at an identity word or the flag, so a wrong or
 stale hint can cost gas but never returns the wrong record. Load a batch's hints once with
@@ -163,10 +163,10 @@ pagepack/=lib/pagepack/src/
 ```
 
 ```solidity
-import {PagePack, Record, Space} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
 
 contract Vault {
-    Space internal immutable BALANCES = PagePack.space("vault.balances", 1);
+    PagedMap internal immutable BALANCES = PagePack.map("vault.balances", 1);
 
     function balanceOf(address owner, uint256 id) external view returns (uint256) {
         return BALANCES.find(_key(owner, id)).read(0);
@@ -193,12 +193,12 @@ contract Vault {
 
 `BALANCES.hintOf(key)` returns a record's hint, so an off-chain caller can build hints for a
 batch with one `eth_call`. `find(key, hint)` takes one hint directly instead. To give records
-that aren't packed a hint too, create the space with `PagePack.spaceWithHomeHints(name, words)`;
+that aren't packed a hint too, create the map with `PagePack.mapWithHomeHints(name, slots)`;
 see [Planning layouts](#planning-layouts) for what that costs.
 
 ### Using records safely
 
-`read` and `write` take a word offset. For named fields, declare a struct as wide as the space
+`read` and `write` take a slot offset. For named fields, declare a struct as wide as the map
 and lay it over the record, and Solidity handles the field offsets and packing:
 
 ```solidity
@@ -208,7 +208,7 @@ struct Account {
     uint64 updatedAt;
 }
 
-Space internal immutable ACCOUNTS = PagePack.space("vault.accounts", 1);
+PagedMap internal immutable ACCOUNTS = PagePack.map("vault.accounts", 1);
 
 function _account(bytes32 key) internal view returns (Account storage account) {
     Record r = ACCOUNTS.find(key);
@@ -228,14 +228,14 @@ A `Record` is a raw storage pointer, and so is a struct laid over one. A few rul
 - **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes keep their contents at
   slots derived from the record's location, so a move would leave them behind. Keep them in their
   own storage, keyed by the record's key.
-- **Match the width.** A struct must be exactly as wide as its space, and `read` and `write`
+- **Match the width.** A struct must be exactly as wide as its map, and `read` and `write`
   offsets must stay below the width: offset `width` is already the next record's identity word.
   Nothing checks either, so test each struct's size. Two elements of a storage array sit exactly
   one struct apart, so the second one's slot is the size, counting arrays, nested structs and any
   field added later:
 
   ```solidity
-  function _accountWords() internal view returns (uint256 words) {
+  function _accountSlots() internal view returns (uint256 slots) {
       Account[2] storage pair;
       assembly ("memory-safe") {
           pair.slot := 0
@@ -243,11 +243,11 @@ A `Record` is a raw storage pointer, and so is a struct laid over one. A few rul
 
       Account storage second = pair[1];
       assembly ("memory-safe") {
-          words := second.slot
+          slots := second.slot
       }
   }
 
-  // In a test: assertEq(_accountWords(), ACCOUNTS.width());
+  // In a test: assertEq(_accountSlots(), ACCOUNTS.width());
   ```
 
   Declare the helper `view`, not `pure`: the compiler treats indexing a storage array as a
@@ -265,25 +265,25 @@ A `Record` is a raw storage pointer, and so is a struct laid over one. A few rul
 
 pagepack applies layouts; choosing them happens off-chain. What a planner needs to know:
 
-- **Capacity.** A space packs up to 1,016 records, at indices below 1,024. The rest stay at home
+- **Capacity.** A map packs up to 1,016 records, at indices below 1,024. The rest stay at home
   and cost what a mapping entry does.
 - **Fingerprint collisions.** The directory knows records by a 22-bit fingerprint, so two records
   with the same one can't both be packed. Among 1,016 random keys there's an 11.6% chance some
   pair collides (3.1% at 512, 0.1% at 100). Check new placements with `fingerprintOf` and leave
   one of each pair at home; otherwise `rebalance` reverts with `FingerprintCollision(key)`.
-- **Record width.** All records in a space have the same width, plus one identity word each when
-  packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-word records, 42 two-word or
-  32 three-word. Put fields that are used together in one record, and rarely used fields in a
-  space of their own.
-- **Schema changes.** A space's location comes from its name, width and mode, so widening a
-  record makes a new space rather than appending to the old one. Moving to it means copying
+- **Record width.** All records in a map have the same width, plus one identity word each when
+  packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-slot records, 42 two-slot or
+  32 three-slot. Put fields that are used together in one record, and rarely used fields in a
+  map of their own.
+- **Schema changes.** A map's location comes from its name, width and mode, so widening a
+  record makes a new map rather than appending to the old one. Moving to it means copying
   records.
-- **Home hints or compact storage.** A default space empties a record's home page when it packs
-  it. A space made with `spaceWithHomeHints` leaves a flag there instead, so a `HOME` hint can
-  confirm a record isn't packed without loading the directory. Each flag is a live storage word
+- **Home hints or compact storage.** A default map empties a record's home page when it packs
+  it. A map made with `mapWithHomeHints` leaves a flag there instead, so a `HOME` hint can
+  confirm a record isn't packed without loading the directory. Each flag is a live storage slot
   that keeps its home page occupied:
 
-  | 512 nonzero one-word records | Live storage words | Occupied pages |
+  | 512 nonzero one-slot records | Live storage slots | Occupied pages |
   | --- | ---: | ---: |
   | Mapping | 512 | 512 |
   | pagepack, all packed | 1,089 | 9 |
@@ -292,36 +292,36 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
   These are logical counts of nonzero slots, not database bytes. Flags pay off when transactions
   often touch records that aren't packed and would load the directory only for them, like the
   long-tail takers in the exchange example. They also make evicting cheaper, since the home slot
-  stays occupied. The choice is part of the space, like its width: the two kinds never share
+  stays occupied. The choice is part of the map, like its width: the two kinds never share
   storage, so switching means migrating.
 - **Gas.** Packing a record from home costs about 39,000 gas plus 18,000 to 20,000 for each
-  nonzero word it holds, mostly MIP-8's charge for new storage slots. Words that are still zero
+  nonzero slot it holds, mostly MIP-8's charge for new storage slots. Slots that are still zero
   cost nothing:
 
   | Packing from home, 16 records per call | Gas per record |
   | --- | ---: |
-  | 1-word records | 58,470 |
-  | 3-word records | 94,479 |
-  | 8-word records | 185,947 |
-  | 8-word records, 1 word set | 62,635 |
-  | 1-word records, never written | 38,054 |
-  | 1-word records, never written, home-hint space | 58,395 |
+  | 1-slot records | 58,472 |
+  | 3-slot records | 94,481 |
+  | 8-slot records | 185,948 |
+  | 8-slot records, 1 slot set | 62,636 |
+  | 1-slot records, never written | 38,056 |
+  | 1-slot records, never written, home-hint map | 58,396 |
 
-  Filling a space of 1,016 one-word records takes about 55M gas, so split large migrations into
+  Filling a map of 1,016 one-slot records takes about 55M gas, so split large migrations into
   transactions sized from the table above; listing new records in fingerprint order also skips a
   sort. After that, a rebalance costs what it changes. Swapping two records costs about 60,000
   gas at any size. Packing or evicting rebuilds the directory once per call, which grows with the
   number of packed records. Evicting also pays 17,000 gas for the record's home slot in a default
-  space:
+  map:
 
-  | Operation (one-word records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
+  | Operation (one-slot records, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
   | --- | ---: | ---: | ---: |
-  | Empty rebalance | 22,861 | 22,861 | 22,861 |
-  | Swap two records | 59,436 | 60,025 | 61,184 |
-  | Move one record | 97,658 | 98,247 | 98,264 |
-  | Evict one record | 93,901 | 158,560 | 230,340 |
-  | Replace one record with another | 114,309 | 175,309 | 250,450 |
-  | Resubmit the whole layout | 146,866 | 1,008,186 | 1,980,958 |
+  | Empty rebalance | 22,883 | 22,883 | 22,883 |
+  | Swap two records | 59,458 | 60,047 | 61,206 |
+  | Move one record | 97,680 | 98,269 | 98,286 |
+  | Evict one record | 93,923 | 158,582 | 230,362 |
+  | Replace one record with another | 114,331 | 175,331 | 250,472 |
+  | Resubmit the whole layout | 146,888 | 1,008,208 | 1,980,980 |
 
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
   cost. Measure that against the current layout, not against mappings: moving a record that

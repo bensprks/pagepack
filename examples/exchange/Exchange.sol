@@ -15,18 +15,18 @@ import {PagePack, Record} from "pagepack/PagePack.sol";
 /// This is a storage benchmark, not a production exchange. It trusts its operator as the
 /// matching and risk engine: see {settle} and the trust assumptions in the README.
 ///
-/// Every piece of state is a one-word record addressed by a bytes32 key, and where a record
+/// Every piece of state is a one-slot record addressed by a bytes32 key, and where a record
 /// lives is left to {_locate}. The PagePack version and the plain-mapping baseline share all of
 /// the logic below, so benchmarks comparing them measure storage layout and nothing else.
 ///
-/// Each kind of record is a struct one word wide, read and written in place through the slot
+/// Each kind of record is a struct one slot wide, read and written in place through the slot
 /// {_locate} returns, so Solidity packs and unpacks the fields.
 abstract contract Exchange {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
     using SafeCast for int256;
 
-    // Records. Solidity packs each struct's fields into one word in declaration order, starting
+    // Records. Solidity packs each struct's fields into one slot in declaration order, starting
     // from the lowest bits.
 
     struct Account {
@@ -57,9 +57,9 @@ abstract contract Exchange {
         uint96 volume;
     }
 
-    /// One change to a resting order. Size 0 cancels the order in that slot.
+    /// One change to a resting order. Size 0 cancels the order at that index.
     struct QuoteUpdate {
-        uint8 slot;
+        uint8 index;
         uint8 market;
         bool isAsk;
         uint64 price;
@@ -69,14 +69,14 @@ abstract contract Exchange {
     /// Part of a maker's resting order taken by the taker.
     struct Fill {
         address maker;
-        uint8 slot;
+        uint8 index;
         uint64 size;
     }
 
     event Deposited(address indexed account, uint256 amount);
     event Withdrawn(address indexed account, uint256 amount);
     event OrderUpdated(
-        address indexed account, uint8 slot, uint8 market, bool isAsk, uint64 price, uint64 size
+        address indexed account, uint8 index, uint8 market, bool isAsk, uint64 price, uint64 size
     );
     event Filled(
         uint8 indexed market,
@@ -90,7 +90,7 @@ abstract contract Exchange {
     error NotOperator();
     error UnknownMarket(uint8 market);
     error MarketExists(uint8 market);
-    error InvalidSlot(uint8 slot);
+    error InvalidOrderIndex(uint8 index);
     error InvalidPrice();
     error InvalidFill();
     error InsufficientBalance(address account);
@@ -204,13 +204,13 @@ abstract contract Exchange {
 
         for (uint256 i; i < updates.length; ++i) {
             QuoteUpdate memory u = updates[i];
-            if (u.slot >= ORDER_SLOTS) revert InvalidSlot(u.slot);
+            if (u.index >= ORDER_SLOTS) revert InvalidOrderIndex(u.index);
 
             // A live order needs a nonzero price: cancelling keeps only the price, market and side,
             // so a zero-price bid in market 0 would empty its slot to zero and lose slot reuse.
             if (u.size != 0 && u.price == 0) revert InvalidPrice();
 
-            Order storage order = _asOrder(_locate(orderKey(msg.sender, u.slot)));
+            Order storage order = _asOrder(_locate(orderKey(msg.sender, u.index)));
             locked = locked - _orderMargin(located, order.price, order.size, order.market)
                 + _orderMargin(located, u.price, u.size, u.market);
 
@@ -223,7 +223,7 @@ abstract contract Exchange {
                 order.isAsk = u.isAsk;
             }
 
-            emit OrderUpdated(msg.sender, u.slot, u.market, u.isAsk, u.price, u.size);
+            emit OrderUpdated(msg.sender, u.index, u.market, u.isAsk, u.price, u.size);
         }
 
         account.locked = locked.toUint64();
@@ -238,8 +238,8 @@ abstract contract Exchange {
     ///         checks the taker's margin.
     /// @dev Trusts the operator, which stands in for the matching and risk engine:
     ///      - It names the taker. Nothing here checks that the taker agreed to the trade.
-    ///      - A fill names a maker's slot and size, not an expected price or order version. If
-    ///        the maker re-quotes that slot first, the fill takes the new order.
+    ///      - A fill names a maker's order index and size, not an expected price or order
+    ///        version. If the maker re-quotes that order slot first, the fill takes the new order.
     ///      - Only the taker's margin is checked. A fill can leave a maker under-margined, e.g.
     ///        an ask far below the mark price; a real exchange checks the maker or liquidates.
     function settle(address taker, Fill[] calldata fills, PagePack.Hint[] calldata hints)
@@ -288,12 +288,12 @@ abstract contract Exchange {
         return (record.size, record.cost);
     }
 
-    function orderOf(address account, uint8 slot)
+    function orderOf(address account, uint8 index)
         external
         view
         returns (uint256 price, uint256 size, uint8 market, bool isAsk)
     {
-        Order storage record = _asOrder(_locate(orderKey(account, slot)));
+        Order storage record = _asOrder(_locate(orderKey(account, index)));
         return (record.price, record.size, record.market, record.isAsk);
     }
 
@@ -327,8 +327,8 @@ abstract contract Exchange {
         return bytes32(POSITION | (uint256(market) << 160) | uint160(account));
     }
 
-    function orderKey(address account, uint8 slot) public pure returns (bytes32) {
-        return bytes32(ORDER | (uint256(slot) << 160) | uint160(account));
+    function orderKey(address account, uint8 index) public pure returns (bytes32) {
+        return bytes32(ORDER | (uint256(index) << 160) | uint160(account));
     }
 
     function marketKey(uint8 market) public pure returns (bytes32) {
@@ -349,7 +349,7 @@ abstract contract Exchange {
     // Typed records
     // ------------------------------------------------------------------------------------------
 
-    // Each struct is exactly one word, the width of a record, so it never reaches past its own
+    // Each struct is exactly one slot, the width of a record, so it never reaches past its own
     // record. A struct pointer goes stale when its record moves: none is held across the
     // collateral transfers, the only external calls that could reach a rebalance.
 
@@ -491,7 +491,7 @@ abstract contract Exchange {
         private
         returns (uint8 market, uint256 price, bool makerSold, uint256 size)
     {
-        Order storage order = _asOrder(_locate(orderKey(f.maker, f.slot)));
+        Order storage order = _asOrder(_locate(orderKey(f.maker, f.index)));
 
         (market, price, makerSold, size) = (order.market, order.price, order.isAsk, order.size);
         if (f.size > size) revert InvalidFill();

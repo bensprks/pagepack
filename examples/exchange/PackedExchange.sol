@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {PagePack, Record, Space} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
 import {Exchange} from "./Exchange.sol";
 
 /// @title PackedExchange
@@ -10,24 +10,24 @@ import {Exchange} from "./Exchange.sol";
 ///         off-chain, so each active market maker's account, positions and order slots share a
 ///         page, and every market's record sits on one shared page.
 contract PackedExchange is Exchange {
-    /// Every record kind shares one space so a layout can mix them on a page. It keeps home flags:
+    /// Every record kind shares one map so a layout can mix them on a page. It keeps home flags:
     /// takers are long-tail accounts that are never packed, and with a HOME hint for the taker a
-    /// fully hinted settlement never loads the directory. The flags cost one word on the home page
+    /// fully hinted settlement never loads the directory. The flags cost one slot on the home page
     /// of each packed record, which here means the few hundred records of active accounts.
-    Space internal immutable RECORDS;
+    PagedMap internal immutable RECORDS;
 
     event Rebalanced(uint256 packedCount);
 
-    /// @param spaceName Names the space, which decides where its records are stored and so their
+    /// @param mapName Names the map, which decides where its records are stored and so their
     ///        fingerprints. The benchmarks vary it; any fixed name works.
     constructor(
         IERC20 collateral_,
         address admin_,
         address operator_,
         address feeRecipient_,
-        string memory spaceName
+        string memory mapName
     ) Exchange(collateral_, admin_, operator_, feeRecipient_) {
-        RECORDS = PagePack.spaceWithHomeHints(spaceName, 1);
+        RECORDS = PagePack.mapWithHomeHints(mapName, 1);
     }
 
     /// @notice Applies a new layout. Hints issued before this call may go stale; they still

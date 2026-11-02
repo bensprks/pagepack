@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {LibSort} from "./utils/LibSort.sol";
 
 /// @title LibDirectory
-/// @notice The directory of a PagePack space: one page mapping a short fingerprint of every packed
+/// @notice The directory of a PagePack map: one page mapping a short fingerprint of every packed
 ///         record to its packed index.
 ///
 /// Layout, from a page-aligned slot `dir`:

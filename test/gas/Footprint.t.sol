@@ -6,7 +6,7 @@ import {PagePack} from "pagepack/PagePack.sol";
 import {LibSort} from "pagepack/utils/LibSort.sol";
 import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 
-/// Counts the storage each layout leaves behind for 512 nonzero one-word balances: live words,
+/// Counts the storage each layout leaves behind for 512 nonzero one-slot balances: live slots,
 /// and the pages they occupy. These are logical counts of nonzero slots, not node database bytes.
 contract FootprintTest is Test {
     uint256 internal constant RECORDS = 512;
@@ -59,7 +59,7 @@ contract FootprintTest is Test {
         }
         LibSort.sort(slots);
 
-        uint256 words;
+        uint256 live;
         uint256 pages;
         uint256 lastSlot = type(uint256).max;
         uint256 lastPage = type(uint256).max;
@@ -70,7 +70,7 @@ contract FootprintTest is Test {
             lastSlot = slot;
 
             if (vm.load(target, bytes32(slot)) == 0) continue;
-            ++words;
+            ++live;
 
             // Sorted slots keep each page's slots together.
             if (slot >> 7 != lastPage) {
@@ -79,7 +79,7 @@ contract FootprintTest is Test {
             }
         }
 
-        vm.snapshotValue("footprint-words", layout, words);
+        vm.snapshotValue("footprint-slots", layout, live);
         vm.snapshotValue("footprint-pages", layout, pages);
     }
 

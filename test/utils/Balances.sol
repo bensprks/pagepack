@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, Record, Space} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
 
 /// Baseline: one Solidity mapping entry per balance.
 contract MappingBalances {
@@ -20,14 +20,14 @@ contract MappingBalances {
     }
 }
 
-/// The same balances stored as one-word PagePack records.
+/// The same balances stored as one-slot PagePack records.
 contract PackedBalances {
-    Space internal immutable BALANCES;
+    PagedMap internal immutable BALANCES;
 
     constructor(bool homeHints) {
         BALANCES = homeHints
-            ? PagePack.spaceWithHomeHints("bench.balances", 1)
-            : PagePack.space("bench.balances", 1);
+            ? PagePack.mapWithHomeHints("bench.balances", 1)
+            : PagePack.map("bench.balances", 1);
     }
 
     function balanceOf(bytes32 key) external view returns (uint256) {

@@ -25,13 +25,13 @@ every market's record on one shared page, and repack when activity shifts.
 
 ## Design
 
-**Records.** Accounts, positions, order slots and markets are all one-word records with a
+**Records.** Accounts, positions, order slots and markets are all one-slot records with a
 `bytes32` key (`accountKey`, `positionKey`, `orderKey`, `marketKey`). `Exchange` asks
 `_locate(key)` where a record lives, lays the record's struct over that slot and does everything
 else itself. `PackedExchange` answers with pagepack; the benchmark baseline answers with a
 mapping. Both share every line of logic.
 
-**One lookup per record per call.** Without a hint, every pagepack lookup searches the space's
+**One lookup per record per call.** Without a hint, every pagepack lookup searches the map's
 directory. A call keeps the records of the market it is working in, so a settlement locates the
 market and the taker's position once rather than on every fill, and a re-quote finds a market's
 margin rate without locating it again for each order.
@@ -46,10 +46,10 @@ reused slot costs 20% less, with or without pagepack.
 them in any order and every lookup picks its hint up. A market maker or a settlement operator
 knows the layout and can always pass them; anyone else passes none.
 
-The exchange's space keeps home flags (`spaceWithHomeHints`). Takers are long-tail accounts that
+The exchange's map keeps home flags (`mapWithHomeHints`). Takers are long-tail accounts that
 are never packed, and with a `HOME` hint for the taker a fully hinted settlement never loads the
-directory. The flags cost one storage word on the home page of each packed record: a few hundred
-words for the active accounts.
+directory. The flags cost one storage slot on the home page of each packed record: a few hundred
+slots for the active accounts.
 
 ## Trust assumptions
 
@@ -59,9 +59,9 @@ and risk engine:
 
 - **Authorization.** The operator names the taker. Nothing on-chain checks that the taker agreed
   to the trade. A real exchange verifies a signed order or has the taker send the transaction.
-- **Order identity.** A fill names a maker's slot and a size, not an expected price or order
-  version. Slots are reused, so if the maker re-quotes between the match and settlement, the
-  fill takes the new order.
+- **Order identity.** A fill names a maker's order index and a size, not an expected price or
+  order version. Slots are reused, so if the maker re-quotes between the match and settlement,
+  the fill takes the new order.
 - **Maker risk.** Only the taker's margin is checked after a fill. Filling a maker can leave it
   under-margined, e.g. an ask far below the mark price. A real exchange checks makers too, or
   liquidates them.
@@ -94,10 +94,10 @@ account; the others quote one market. The taker is a long-tail account and is no
 - **Settlement** saves on every maker and grows with the batch: each maker's account, order and
   position share a page with other makers'.
 - **Without hints, results depend a little on the records' fingerprints.** A directory search
-  takes one to a few probes depending on the fingerprint it looks for, and a space's name decides
-  every fingerprint. The same 14-maker settlement without hints, under six space names:
+  takes one to a few probes depending on the fingerprint it looks for, and a map's name decides
+  every fingerprint. The same 14-maker settlement without hints, under six map names:
 
-  | Space name | pagepack |
+  | Map name | pagepack |
   | --- | ---: |
   | pagepack.exchange | 330,183 |
   | pagepack.exchange.1 | 330,839 |

@@ -24,7 +24,7 @@ abstract contract ExchangeTest is Test {
     address internal taker = makeAddr("taker");
 
     event OrderUpdated(
-        address indexed account, uint8 slot, uint8 market, bool isAsk, uint64 price, uint64 size
+        address indexed account, uint8 index, uint8 market, bool isAsk, uint64 price, uint64 size
     );
     event Filled(
         uint8 indexed market,
@@ -136,11 +136,11 @@ abstract contract ExchangeTest is Test {
         _quote(maker, 0, ETH, true, 2_000, 10_000); // locks 2,000,000
     }
 
-    function test_quoteRevertsForUnknownMarketOrSlot() public {
+    function test_quoteRevertsForUnknownMarketOrIndex() public {
         vm.expectRevert(abi.encodeWithSelector(Exchange.UnknownMarket.selector, 9));
         _quote(maker, 0, 9, true, 1, 1);
 
-        vm.expectRevert(abi.encodeWithSelector(Exchange.InvalidSlot.selector, 16));
+        vm.expectRevert(abi.encodeWithSelector(Exchange.InvalidOrderIndex.selector, 16));
         _quote(maker, 16, ETH, true, 1, 1);
     }
 
@@ -280,14 +280,14 @@ abstract contract ExchangeTest is Test {
 
     function _quote(
         address account,
-        uint8 slot,
+        uint8 index,
         uint8 market,
         bool isAsk,
         uint64 price,
         uint64 size
     ) internal {
         Exchange.QuoteUpdate[] memory updates = new Exchange.QuoteUpdate[](1);
-        updates[0] = Exchange.QuoteUpdate(slot, market, isAsk, price, size);
+        updates[0] = Exchange.QuoteUpdate(index, market, isAsk, price, size);
 
         vm.prank(account);
         exchange.requote(updates, _noHints());
@@ -298,13 +298,13 @@ abstract contract ExchangeTest is Test {
         exchange.settle(account, fills, _noHints());
     }
 
-    function _fill(address account, uint8 slot, uint64 size)
+    function _fill(address account, uint8 index, uint64 size)
         internal
         pure
         returns (Exchange.Fill[] memory fills)
     {
         fills = new Exchange.Fill[](1);
-        fills[0] = Exchange.Fill(account, slot, size);
+        fills[0] = Exchange.Fill(account, index, size);
     }
 
     function _noHints() internal pure returns (PagePack.Hint[] memory) {}
@@ -408,7 +408,7 @@ contract PackedExchangeTest is ExchangeTest {
     }
 }
 
-/// Exposes the width of the exchange's space.
+/// Exposes the width of the exchange's map.
 contract ExchangeRecords is PackedExchange {
     constructor()
         PackedExchange(IERC20(address(0)), address(0), address(0), address(0), "pagepack.exchange")
@@ -420,23 +420,23 @@ contract ExchangeRecords is PackedExchange {
 }
 
 contract ExchangeRecordsTest is Test {
-    /// Each record struct must be exactly as wide as the exchange's space, or writing it would
+    /// Each record struct must be exactly as wide as the exchange's map, or writing it would
     /// run into the next packed record.
-    function test_recordStructsMatchTheSpaceWidth() public {
+    function test_recordStructsMatchTheMapWidth() public {
         uint256 width = new ExchangeRecords().width();
 
-        assertEq(_accountWords(), width, "Account");
-        assertEq(_positionWords(), width, "Position");
-        assertEq(_orderWords(), width, "Order");
-        assertEq(_marketWords(), width, "Market");
+        assertEq(_accountSlots(), width, "Account");
+        assertEq(_positionSlots(), width, "Position");
+        assertEq(_orderSlots(), width, "Order");
+        assertEq(_marketSlots(), width, "Market");
     }
 
-    // A struct's size in words is how far apart two of them sit in a storage array. These helpers
+    // A struct's size in slots is how far apart two of them sit in a storage array. These helpers
     // are `view` only because the compiler treats indexing a storage array as a possible read and
     // rejects `pure`. Indexing a fixed-size array just computes a slot, so they read and write no
     // storage.
 
-    function _accountWords() internal view returns (uint256 words) {
+    function _accountSlots() internal view returns (uint256 slots) {
         Exchange.Account[2] storage pair;
         assembly ("memory-safe") {
             pair.slot := 0
@@ -444,11 +444,11 @@ contract ExchangeRecordsTest is Test {
 
         Exchange.Account storage second = pair[1];
         assembly ("memory-safe") {
-            words := second.slot
+            slots := second.slot
         }
     }
 
-    function _positionWords() internal view returns (uint256 words) {
+    function _positionSlots() internal view returns (uint256 slots) {
         Exchange.Position[2] storage pair;
         assembly ("memory-safe") {
             pair.slot := 0
@@ -456,11 +456,11 @@ contract ExchangeRecordsTest is Test {
 
         Exchange.Position storage second = pair[1];
         assembly ("memory-safe") {
-            words := second.slot
+            slots := second.slot
         }
     }
 
-    function _orderWords() internal view returns (uint256 words) {
+    function _orderSlots() internal view returns (uint256 slots) {
         Exchange.Order[2] storage pair;
         assembly ("memory-safe") {
             pair.slot := 0
@@ -468,11 +468,11 @@ contract ExchangeRecordsTest is Test {
 
         Exchange.Order storage second = pair[1];
         assembly ("memory-safe") {
-            words := second.slot
+            slots := second.slot
         }
     }
 
-    function _marketWords() internal view returns (uint256 words) {
+    function _marketSlots() internal view returns (uint256 slots) {
         Exchange.Market[2] storage pair;
         assembly ("memory-safe") {
             pair.slot := 0
@@ -480,7 +480,7 @@ contract ExchangeRecordsTest is Test {
 
         Exchange.Market storage second = pair[1];
         assembly ("memory-safe") {
-            words := second.slot
+            slots := second.slot
         }
     }
 }
