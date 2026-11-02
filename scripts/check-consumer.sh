@@ -25,30 +25,30 @@ TOML
 echo 'pagepack/=lib/pagepack/src/' > "$consumer/remappings.txt"
 
 # The README has users copy the typed map example into their own source.
-cp "$repo/examples/loans/LoanMap.sol" "$consumer/src/"
+cp "$repo/examples/orderbook/BalanceMap.sol" "$consumer/src/"
 
 cat > "$consumer/src/Consumer.sol" <<'SOL'
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
 import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
-import {LoanMap, loanMap} from "./LoanMap.sol";
+import {BalanceMap, balanceMap} from "./BalanceMap.sol";
 
 contract Consumer {
-    LoanMap internal immutable LOANS = loanMap("consumer.loans");
-    PagedMap internal immutable BALANCES = PagePack.map("consumer.balances", 1);
+    BalanceMap internal immutable BALANCES = balanceMap("consumer.balances");
+    PagedMap internal immutable FEES = PagePack.map("consumer.fees", 1);
 
-    function accrue(uint256 loanId, uint128 amount) external {
-        LOANS.find(loanId).interest += amount;
+    function pay(address maker, uint128 amount) external {
+        BALANCES.find(maker).quote += amount;
     }
 
-    function balanceOf(bytes32 key) external view returns (uint256) {
-        return BALANCES.find(key).read(0);
+    function feeOf(bytes32 key) external view returns (uint256) {
+        return FEES.find(key).read(0);
     }
 
-    function credit(bytes32 key, uint256 amount) external {
-        Entry balance = BALANCES.find(key);
-        balance.write(0, balance.read(0) + amount);
+    function chargeFee(bytes32 key, uint256 amount) external {
+        Entry fee = FEES.find(key);
+        fee.write(0, fee.read(0) + amount);
     }
 }
 SOL
