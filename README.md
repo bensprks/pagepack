@@ -26,14 +26,14 @@ updates then load one page.
 
 It pays off when:
 
-- **Transactions touch many entries.** A trade pays a dozen makers, a settlement nets many
-  accounts, a keeper updates a batch of positions. A struct already keeps one owner's fields on
-  one page; pagepack groups many owners' entries. A transaction touching one entry costs more
-  than with a mapping (4% with a hint, 30% without), so if most of yours touch one, use a
+- **Transactions touch entries under many different keys.** A mapping of structs already keeps
+  one key's fields on one page. pagepack puts entries under different keys on the same page. A
+  transaction that touches one entry costs more than with a regular mapping: +4% with a hint, +30%
+  without.
+- **A small set of entries gets most of the traffic, and that set changes over time.** An
+  offchain planner tracks which entries are used together, and the admin calls `rebalance` to
+  repack them. Up to 1,016 entries can be packed. The rest stay one per page, as in a regular
   mapping.
-- **A small set of entries is busy, and that set shifts.** An offchain planner watches which
-  entries are used together, and the admin rebalances as that changes. Up to 1,016 entries can be
-  packed; the rest stay one to a page, like mapping entries.
 
 ## Results
 
