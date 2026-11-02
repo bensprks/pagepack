@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {PagePack, Record} from "pagepack/PagePack.sol";
+import {PagePack} from "pagepack/PagePack.sol";
 import {Exchange} from "../../examples/exchange/Exchange.sol";
 import {PackedExchange} from "../../examples/exchange/PackedExchange.sol";
 import {MappingExchange} from "./utils/MappingExchange.sol";
@@ -407,47 +407,75 @@ contract PackedExchangeTest is ExchangeTest {
     }
 }
 
-/// Exposes the exchange's record structs over its own space. Each function writes only a struct's
-/// last field into an empty record and returns the record's last word. When a struct gains a
-/// field, move its probe to the new last field.
+/// Exposes the width of the exchange's space.
 contract ExchangeRecords is PackedExchange {
     constructor() PackedExchange(IERC20(address(0)), address(0), address(0), address(0)) {}
 
-    function accountLastWord() external returns (uint256) {
-        Record r = RECORDS.find("account");
-        _asAccount(r).markets = 1;
-        return r.read(RECORDS.width() - 1);
-    }
-
-    function positionLastWord() external returns (uint256) {
-        Record r = RECORDS.find("position");
-        _asPosition(r).cost = 1;
-        return r.read(RECORDS.width() - 1);
-    }
-
-    function orderLastWord() external returns (uint256) {
-        Record r = RECORDS.find("order");
-        _asOrder(r).isAsk = true;
-        return r.read(RECORDS.width() - 1);
-    }
-
-    function marketLastWord() external returns (uint256) {
-        Record r = RECORDS.find("market");
-        _asMarket(r).volume = 1;
-        return r.read(RECORDS.width() - 1);
+    function width() external view returns (uint256) {
+        return RECORDS.width();
     }
 }
 
 contract ExchangeRecordsTest is Test {
-    /// A struct must be exactly as wide as its space, and then its last field lands in the
-    /// record's last word. A wider struct puts it past the record, over the next packed record's
-    /// identity word; a narrower one leaves that word empty.
+    /// Each record struct must be exactly as wide as the exchange's space, or writing it would
+    /// run into the next packed record.
     function test_recordStructsMatchTheSpaceWidth() public {
-        ExchangeRecords records = new ExchangeRecords();
+        uint256 width = new ExchangeRecords().width();
 
-        assertNotEq(records.accountLastWord(), 0, "Account");
-        assertNotEq(records.positionLastWord(), 0, "Position");
-        assertNotEq(records.orderLastWord(), 0, "Order");
-        assertNotEq(records.marketLastWord(), 0, "Market");
+        assertEq(_accountWords(), width, "Account");
+        assertEq(_positionWords(), width, "Position");
+        assertEq(_orderWords(), width, "Order");
+        assertEq(_marketWords(), width, "Market");
+    }
+
+    // A struct's size in words is how far apart two of them sit in a storage array. Indexing a
+    // fixed-size array only computes the slot; nothing is read or written.
+
+    function _accountWords() internal view returns (uint256 words) {
+        Exchange.Account[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Account storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _positionWords() internal view returns (uint256 words) {
+        Exchange.Position[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Position storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _orderWords() internal view returns (uint256 words) {
+        Exchange.Order[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Order storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _marketWords() internal view returns (uint256 words) {
+        Exchange.Market[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Market storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
     }
 }

@@ -17,10 +17,12 @@ contract TypedRecordsTest is Test {
         uint64 updatedAt;
     }
 
-    /// One word too many for the space.
+    /// Four words, one too many for the space. Its last field is an array that starts in the
+    /// record's last word and runs one word past it.
     struct OverfullVault {
-        Vault vault;
-        uint256 extra;
+        address owner;
+        uint256 debt;
+        uint256[2] limits;
     }
 
     Space internal immutable VAULTS = PagePack.space("test.vaults", 3);
@@ -28,6 +30,12 @@ contract TypedRecordsTest is Test {
     bytes32 internal constant KEY = "vault";
 
     function _vault(Record r) internal pure returns (Vault storage vault) {
+        assembly ("memory-safe") {
+            vault.slot := r
+        }
+    }
+
+    function _overfullVault(Record r) internal pure returns (OverfullVault storage vault) {
         assembly ("memory-safe") {
             vault.slot := r
         }
@@ -48,29 +56,29 @@ contract TypedRecordsTest is Test {
         assertEq(r.read(2), 1_000 | (7 << 128));
     }
 
-    /// Copy this check for each struct: its last field lands in the record's last word only if
-    /// the struct is exactly as wide as the space.
-    function test_structMatchesTheSpaceWidth() public {
-        Record r = VAULTS.find(KEY);
-        _vault(r).updatedAt = 1;
-
-        assertNotEq(r.read(VAULTS.width() - 1), 0);
+    /// Copy this check for each struct: it must be exactly as wide as its space.
+    function test_structMatchesTheSpaceWidth() public view {
+        assertEq(_vaultWords(), VAULTS.width());
     }
 
-    /// What that check prevents: a wider struct over a packed record writes its last field into
-    /// the next record's identity word, and the next record can no longer be found.
+    /// The check counts every word a struct takes, arrays and nested structs included.
+    function test_widthCheckCatchesAWiderStruct() public view {
+        assertEq(_overfullVaultWords(), VAULTS.width() + 1);
+    }
+
+    /// What the check prevents: a wider struct over a packed record writes into the next record's
+    /// identity word, and the next record can no longer be found.
     function test_widerStructOverwritesTheNextRecord() public {
         bytes32 next = "next";
         _vault(VAULTS.find(next)).debt = 500;
         _pack(KEY, next);
 
         Record r = VAULTS.find(KEY);
-        OverfullVault storage overfull;
-        assembly ("memory-safe") {
-            overfull.slot := r
-        }
-        overfull.extra = 1;
+        _overfullVault(r).limits = [uint256(1), uint256(1)];
 
+        // The record's last word is set, as if the struct fit, so checking that word alone
+        // would miss the overflow.
+        assertNotEq(r.read(VAULTS.width() - 1), 0);
         assertEq(_vault(VAULTS.find(next)).debt, 0);
     }
 
@@ -84,6 +92,33 @@ contract TypedRecordsTest is Test {
         // The old pointer still names the record's home, which packing cleared.
         assertEq(vault.debt, 0);
         assertEq(_vault(VAULTS.find(KEY)).debt, 500);
+    }
+
+    // A struct's size in words is how far apart two of them sit in a storage array. Indexing a
+    // fixed-size array only computes the slot; nothing is read or written.
+
+    function _vaultWords() internal view returns (uint256 words) {
+        Vault[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Vault storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _overfullVaultWords() internal view returns (uint256 words) {
+        OverfullVault[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        OverfullVault storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
     }
 
     /// Packs two records side by side, at indices 0 and 1.
