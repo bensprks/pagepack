@@ -236,7 +236,7 @@ contract ExchangeGasTest is Test {
     // Hints
     // ------------------------------------------------------------------------------------------
 
-    /// Hints for `keys`, as an off-chain caller would build them. Entries that aren't packed get
+    /// Hints for `keys`, as an offchain caller would build them. Entries that aren't packed get
     /// PagePack.HOME.
     function _hints(bytes32[] memory keys) internal view returns (PagePack.Hint[] memory hints) {
         hints = new PagePack.Hint[](keys.length);

@@ -31,16 +31,15 @@ It pays off when:
   one page; pagepack groups many owners' entries. A transaction touching one entry costs more
   than with a mapping (4% with a hint, 30% without), so if most of yours touch one, use a
   mapping.
-- **A small set of entries is busy, and that set shifts.** An off-chain planner
-  ([planned](analysis/)) watches which entries are used together, and the admin rebalances as
-  that changes. Up to 1,016 entries can be packed; the rest stay one to a page, like mapping
-  entries.
+- **A small set of entries is busy, and that set shifts.** An offchain planner watches which
+  entries are used together, and the admin rebalances as that changes. Up to 1,016 entries can be
+  packed; the rest stay one to a page, like mapping entries.
 
 ## Results
 
 Updating existing one-slot balances in one transaction, from `make gas` on Monad's gas schedule:
 
-| Entries updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
+| Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
 | 1 entry | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
 | 2 entries | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
@@ -129,7 +128,7 @@ there is one, otherwise searches the directory (about 1,000 to 1,400 gas once it
 loaded), and falls back to home if the key isn't listed. Hints are verified, so a wrong one costs
 gas but never returns the wrong entry.
 
-**Hints** let a lookup skip the directory. Callers get them off-chain from `hintOf(key)` and send
+**Hints** let a lookup skip the directory. Callers get them offchain from `hintOf(key)` and send
 them with the transaction, and the contract loads them once with `useHints`. Maps made with
 `mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 

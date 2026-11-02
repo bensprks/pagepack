@@ -2,8 +2,8 @@
 
 The account side of a perpetuals exchange, built on pagepack: collateral, positions, resting
 orders and cross-margin checks. It models the storage that order-book exchanges on Monad touch
-on every transaction, whether matching runs on-chain against a resting book (like
-[Perpl](MAINNET.md)) or off-chain in an operator's engine that settles fills in batches.
+on every transaction, whether matching runs onchain against a resting book (like
+[Perpl](MAINNET.md)) or offchain in an operator's engine that settles fills in batches.
 
 | File | What it does |
 | --- | --- |
@@ -62,7 +62,7 @@ This is a storage benchmark, kept small on purpose. It enforces its own accounti
 locked margin, the taker's margin), but trusts the operator that calls `settle` as the matching
 and risk engine:
 
-- **Authorization.** The operator names the taker. Nothing on-chain checks that the taker agreed
+- **Authorization.** The operator names the taker. Nothing onchain checks that the taker agreed
   to the trade. A real exchange verifies a signed order or has the taker send the transaction.
 - **Order identity.** A fill names a maker's order index and a size, not an expected price or
   order version. Slots are reused, so if the maker re-quotes between the match and settlement,
@@ -123,7 +123,7 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 ## Rebalancing
 
-The admin applies layouts chosen off-chain from recent activity, e.g. daily:
+The admin applies layouts chosen offchain from recent activity, e.g. daily:
 
 1. Rank accounts by how often they trade, and markets by how often they are read.
 2. Place each hot account's account, order-slot and position entries together, and every market

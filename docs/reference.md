@@ -8,7 +8,7 @@ schedule.
 
 Updating existing one-slot balances in one transaction:
 
-| Entries updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
+| Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
 | 1 entry | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
 | 2 entries | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
@@ -85,7 +85,7 @@ The **directory** lists every packed entry by a 22-bit fingerprint with its pack
 ```
 
 A hint is a packed entry's index plus one, or `HOME` for an entry that isn't packed. An
-off-chain caller gets a batch's hints from `hintOf(key)` in one `eth_call`. The contract loads
+offchain caller gets a batch's hints from `hintOf(key)` in one `eth_call`. The contract loads
 them with `useHints`, which keeps them in transient storage so every lookup in the transaction
 picks its hint up; `find(key, hint)` takes a single hint directly. `HOME` only works in maps made
 with `mapWithHomeHints`; other maps ignore it.
@@ -192,7 +192,7 @@ so switching means migrating.
 
 ## Planning layouts
 
-pagepack applies layouts; choosing them happens off-chain. What a planner needs to know:
+pagepack applies layouts; choosing them happens offchain. What a planner needs to know:
 
 - **Capacity.** A map packs up to 1,016 entries, at indices below 1,024. The rest stay at home,
   a page each like mapping entries, and finding one still searches the directory unless it has a

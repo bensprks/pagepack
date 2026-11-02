@@ -125,7 +125,7 @@ function map(ExchangeMap entries) pure returns (PagedMap) {
 // Keys
 // ----------------------------------------------------------------------------------------------
 
-// For hints, layouts and off-chain tools.
+// For hints, layouts and offchain tools.
 
 function accountKey(address trader) pure returns (bytes32) {
     return bytes32(ACCOUNT_KIND | uint160(trader));

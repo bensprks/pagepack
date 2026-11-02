@@ -8,7 +8,7 @@ import {Account, ExchangeMap, Market, Order, Position, exchangeMap} from "./Exch
 
 /// @title PackedExchange
 /// @notice Exchange with its entries stored by PagePack. The admin applies layouts chosen
-///         off-chain, so each active market maker's account, positions and order slots share a
+///         offchain, so each active market maker's account, positions and order slots share a
 ///         page, and every market's entry sits on one shared page.
 contract PackedExchange is Exchange {
     /// Every entry kind shares one typed map, so a layout can mix them on a page. It keeps home
