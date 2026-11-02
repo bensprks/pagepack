@@ -1,47 +1,39 @@
 # pagepack
 
-A Solidity `PagedMap`: a mapping whose busiest entries can be moved next to each other in
-storage, so transactions on Monad load fewer storage pages.
+A Solidity library for Monad that moves storage entries used together onto shared pages, so
+transactions that touch many of them cost less.
 
-[MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md) prices storage by 128-slot
-page: the first slot a transaction touches on a page costs 8,100 gas, and every other slot on that
-page costs 100. A Solidity mapping scatters its entries one to a page, so a transaction that
-updates 30 balances loads 30 pages. A `PagedMap` starts out the same, but an admin can regroup
-entries that are used together onto shared pages, and the same transaction then loads one.
+[MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md) prices storage by the
+128-slot page: the first slot a transaction touches on a page costs 8,100 gas, and every other
+slot on that page 100. A Solidity mapping puts each entry on its own page, so updating 30
+balances pays for 30 pages.
 
-> Work in progress. Not audited.
+pagepack's core type, `PagedMap`, works like a mapping, except that an admin can `rebalance` it:
+move the busiest entries side by side onto shared pages. The same update then loads one page.
 
-## Before and after a rebalance
+```
+  mapping: one entry per page           PagedMap, after a rebalance
+  ┌───┐ ┌───┐ ┌───┐       ┌────┐        ┌───┬───┬───┬─────┬────┐
+  │ 1 │ │ 2 │ │ 3 │  ...  │ 30 │        │ 1 │ 2 │ 3 │ ... │ 30 │
+  └───┘ └───┘ └───┘       └────┘        └───┴───┴───┴─────┴────┘
+  30 page loads                         1 page load, with hints
+```
 
-A `PagedMap` behaves like a mapping until it is rebalanced. Take three entries, A, B and C, that
-are often used in the same transaction:
+It pays off when:
 
-| Step | Mapping | `PagedMap` |
-| --- | --- | --- |
-| An entry is first written | Lands on its own page, fixed by its key | Lands on its own *home* page, fixed by its key |
-| A transaction uses A, B and C | 3 page loads | 3 page loads, plus the directory page |
-| `rebalance` groups A, B and C | A mapping can't move entries | They move side by side onto one *packed* page |
-| Every later transaction using them | 3 page loads | 1 page load with hints, 2 without |
-| Usage changes | Nothing changes | The next rebalance regroups |
-| A new key is written | Its own page | Its own home page, until a rebalance packs it |
-
-Nothing moves on its own. An off-chain planner watches which entries are used together, and the
-admin applies its layout ([why](#why-entries-dont-pack-themselves)).
-
-## When it pays off
-
-pagepack pays off when two things hold:
-
-- **Transactions change many entries at once.** A trade pays a dozen makers, a settlement nets
-  many accounts, a keeper updates a batch of positions. A transaction that touches one entry costs
-  more than with a mapping, because finding an entry costs gas: 4% more with a hint, 30% without.
-- **A small, shifting set of entries takes most of the traffic.** The busiest accounts, markets or
-  positions change over time, so a periodic rebalance moves the layout with them. A map packs up
-  to 1,016 entries; the rest stay at home, a page each like mapping entries.
+- **Transactions touch many entries.** A trade pays a dozen makers, a settlement nets many
+  accounts, a keeper updates a batch of positions. A struct already keeps one owner's fields on
+  one page; pagepack groups many owners' entries. A transaction touching one entry costs more
+  than with a mapping (4% with a hint, 30% without), so if most of yours touch one, use a
+  mapping.
+- **A small set of entries is busy, and that set shifts.** An off-chain planner
+  ([planned](analysis/)) watches which entries are used together, and the admin rebalances as
+  that changes. Up to 1,016 entries can be packed; the rest stay one to a page, like mapping
+  entries.
 
 ## Results
 
-Updating existing one-slot balances in one transaction, Monad gas schedule, from `make gas`:
+Updating existing one-slot balances in one transaction, from `make gas` on Monad's gas schedule:
 
 | Entries updated in one tx | Mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
@@ -50,23 +42,12 @@ Updating existing one-slot balances in one transaction, Monad gas schedule, from
 | 10 entries | 139,537 | 67,616 (-52%) | 49,609 (-64%) |
 | 30 entries | 375,029 | 123,085 (-67%) | 82,441 (-78%) |
 | 64 entries, a full page | 775,423 | 215,318 (-72%) | 138,313 (-82%) |
-| 30 entries, 3 pages | 375,029 | 141,802 (-62%) | 104,401 (-72%) |
 | 2 unpacked entries | 45,309 | 56,398 (+24%) | – |
-| 2 unpacked entries, home-hint map | 45,309 | 57,547 (+27%) | 47,871 (+6%) |
 
-The saving grows with batch size, which is the case pagepack is built for, e.g. a protocol that
-settles 1 to 30 accounts every few hundred milliseconds. Without hints, single-entry writes and
-entries that were never packed cost more than a mapping, because finding an entry costs gas too.
-In a map that keeps home flags, a hint brings an entry that was never packed within 6% of a
-mapping entry, at a [storage cost](docs/reference.md#home-hints-or-compact-storage).
-
-What pagepack adds over a well-designed mapping is grouping *across* keys, and regrouping as
-usage changes. A mapping of per-owner structs already keeps one owner's entries on one page;
-pagepack can also put many owners' entries on one page.
-
-In the [order-book exchange example](examples/exchange), modelled on the transactions that
-dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
-14 makers 55% less than the same exchange on mappings.
+A page holds 64 packed one-slot entries, because each is stored with an identity word. Entries
+that aren't packed cost more than mapping entries, since a lookup still searches the directory;
+[the full table](docs/reference.md#results) includes maps whose `HOME` hints bring them within
+6%.
 
 ## Usage
 
@@ -74,16 +55,9 @@ dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker 
 forge install bensprks/pagepack
 ```
 
-Then add this line to your project's `remappings.txt`. Without it, Foundry's automatic
-remapping points `pagepack/` at the repository root rather than `src/`, and the import fails.
-
-```text
-pagepack/=lib/pagepack/src/
-```
-
-Give each kind of entry a typed map: copy
-[`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) and rename its struct,
-key and functions. Here an order book pays the makers whose asks a buy fills:
+Add `pagepack/=lib/pagepack/src/` to `remappings.txt`. Then copy
+[`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) for each struct you
+store, renaming the struct, key and functions. Here an order book pays the makers a buy fills:
 
 ```solidity
 import {PagePack} from "pagepack/PagePack.sol";
@@ -110,7 +84,7 @@ contract OrderBook {
 }
 ```
 
-The same contract on a plain mapping:
+The same contract on a mapping:
 
 ```solidity
 contract OrderBook {
@@ -126,234 +100,74 @@ contract OrderBook {
 }
 ```
 
-The loop is the same: `balances[maker]` becomes `BALANCES.find(maker)`, and hints are optional.
-The admin packs the busiest makers together with `BALANCES.map().rebalance(...)`, and repacks
-as they change, so a buy that fills 14 makers loads one or two pages instead of 14.
+`balances[maker]` becomes `BALANCES.find(maker)`, and hints are optional. The admin packs the
+busiest makers with `BALANCES.map().rebalance(evictions, placements)`.
 
-The module holds the `Balance` struct and a `BalanceMap` type wrapping a `PagedMap`.
-`balanceMap(name)` takes the map's width from the struct itself: in a `Balance[2] storage` array,
-the slot of the second element is the struct's size. `find(account)` returns `Balance storage`
-wherever the entry lives, and Solidity handles the field offsets and packing. `balanceKey(account)`
-gives the `bytes32` key that hints, layouts and off-chain tools use, and `map()` the underlying
-`PagedMap`.
-
-Solidity reads and writes each field separately. To load the slot only once, read the fields you
-need in one statement and write the changed ones together, after any checks. Each extra field
-written still costs about 100 gas, where a hand-packed word is written once.
-
-### Several kinds in one map
-
-Entries only share pages with entries in the same map, so entities used together, such as an
-account and its positions, belong in one map. Write one module for the map, with a getter and a
-key function per kind. Its width is set by hand, and the constructor function checks every struct
-against it with `requireFits`, so a struct that outgrows it stops the deploy:
-
-```solidity
-function exchangeMap(string memory name) view returns (ExchangeMap) {
-    PagedMap entries = PagePack.mapWithHomeHints(name, 1);
-
-    entries.requireFits(_accountSlots());
-    entries.requireFits(_positionSlots());
-    entries.requireFits(_orderSlots());
-    entries.requireFits(_marketSlots());
-
-    return ExchangeMap.wrap(PagedMap.unwrap(entries));
-}
-```
-
-The exchange example's [`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) works this way, with
-`ENTRIES.account(trader)`, `ENTRIES.position(trader, market)`, `ENTRIES.order(trader, index)` and
-`ENTRIES.market(market)`.
-
-### Entries underneath
-
-A typed map is a thin layer over `PagedMap` and `Entry`. `find(key)` on a `PagedMap` returns an
-`Entry`, the slot where the entry's data starts, and `read` and `write` use it a slot at a time:
-
-```solidity
-import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
-
-PagedMap internal immutable BALANCES = PagePack.map("vault.balances", 1);
-
-function credit(bytes32 key, uint256 amount) internal {
-    Entry e = BALANCES.find(key);
-    e.write(0, e.read(0) + amount);
-}
-```
-
-A typed getter lays its struct over the same slot.
+Entries share pages only within one map, so put entities used together, such as an account and
+its positions, in one map with a getter per kind. The exchange's
+[`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) does this, checking each struct against
+the map's width with `requireFits` at deploy. To work with raw slots instead of structs, see
+[using `PagedMap` directly](docs/reference.md#using-pagedmap-directly).
 
 ## How it works
 
-### Where an entry lives
+An entry lives in one of two places:
 
-Every entry in a `PagedMap` is in exactly one of two places:
+- **Home**, at `keccak256(map, key)` rounded down to a page start: a page per entry, like a
+  mapping. Every entry starts here.
+- **Packed**, side by side on the map's packed pages, where `rebalance` puts it. Each packed
+  entry follows an identity word, `keccak256(map, key)`, so a page holds
+  `floor(128 / (width + 1))` entries: 64 one-slot or 42 two-slot.
 
-- **Home.** Its default address: `keccak256(map, key)`, rounded down to the start of a page. Like
-  a mapping entry, each entry's home is on a page of its own. Every entry starts here, and
-  rounding to a page start keeps an entry of up to 127 slots on one page.
-- **Packed.** A numbered position on the map's packed pages, where `rebalance` puts entries side
-  by side. Each packed entry is stored with an *identity word*, `keccak256(map, key)`, so a
-  lookup can confirm it found the right entry.
+A **directory** page lists the packed entries by fingerprint. `find(key)` checks the hint if
+there is one, otherwise searches the directory (about 1,000 to 1,400 gas once its page is
+loaded), and falls back to home if the key isn't listed. Hints are verified, so a wrong one costs
+gas but never returns the wrong entry.
 
-One more page, the **directory**, lists every packed entry by a short fingerprint with its packed
-index, up to 1,016 entries, so a lookup can tell whether a key is packed and where.
+**Hints** let a lookup skip the directory. Callers get them off-chain from `hintOf(key)` and send
+them with the transaction, and the contract loads them once with `useHints`. Maps made with
+`mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 
-```
-  directory: one page per map
-  ┌───────┬────────────┬────────────┬─────┐
-  │ count │ fp → index │ fp → index │ ... │   a fingerprint and packed index for each packed
-  └───────┴────────────┴────────────┴─────┘   entry, sorted by fingerprint, 8 per slot
+**Rebalancing** names only the entries that move and applies as one step, so swaps work. Packing
+a one-slot entry costs about 58,000 gas and swapping two about 60,000. pagepack has no access
+control: your contract decides who rebalances. Entries never pack themselves, because the
+busiest entries are rarely the first ones created.
 
-  packed pages: entries used together, side by side
-  ┌────┬──────┬────┬──────┬─────┬────┬──────┬────────┐
-  │ id │ data │ id │ data │ ... │ id │ data │ unused │   floor(128 / (width + 1)) entries
-  └────┴──────┴────┴──────┴─────┴────┴──────┴────────┘   per page: 42 for two-slot entries
-   index 0     index 1           index 41
-
-  home pages: one per entry at keccak256(map, key), like a mapping entry
-  ┌──────┬──────────────────────────────────────┬──────┐
-  │ data │ unused                               │ flag │   data until the entry is packed;
-  └──────┴──────────────────────────────────────┴──────┘   flag while packed (home-hint maps)
-```
-
-### Finding an entry
-
-`find(key)` returns the entry wherever it currently lives:
-
-1. **With a hint**, it checks that one place first: a packed index against the identity word
-   there, or, in a home-hint map, `HOME` against the flag on the home page.
-2. **Otherwise**, or if the hint is wrong, it searches the directory. That loads the directory
-   page once per transaction, then costs about 1,000 to 1,400 gas per search.
-3. **If the directory doesn't list the key**, the entry is at home.
-
-Every path ends at an identity word or the flag, so a wrong or stale hint can cost gas but never
-returns the wrong entry. A lookup without a hint searches again even for an entry found earlier
-in the call, so look an entry up once per call and pass its struct along, as long as nothing in
-between could rebalance. The [reference](docs/reference.md#finding-an-entry) has the full lookup
-and search details.
-
-### Hints
-
-A hint tells `find` where to look: a packed entry's index plus one, or `HOME` for an entry that
-isn't packed. An off-chain caller gets a batch's hints from `hintOf(key)` in one `eth_call` and
-sends them with the transaction. The contract loads them once with `useHints`, and every lookup in
-the transaction picks them up; `find(key, hint)` takes a single hint directly instead. Callers
-who know the layout, such as an operator submitting batches, pass hints; anyone else passes
-none.
-
-`HOME` only works in maps made with `PagePack.mapWithHomeHints`, which keep a flag on each packed
-entry's home page. A `HOME` hint then confirms an entry isn't packed by reading its home page
-alone, at the cost of [one extra storage slot](docs/reference.md#home-hints-or-compact-storage)
-per packed entry. Other maps ignore it.
-
-### Rebalancing
-
-The admin applies layouts chosen off-chain from observed activity (see `analysis/`) with
-`rebalance(evictions, placements)`. A call names only the entries that move and where each ends
-up, and it applies as one step, so swaps and cycles work. Packing a one-slot entry costs about
-58,000 gas, mostly MIP-8's charge for new storage slots, and swapping two packed entries about
-60,000. The library has no access control: the contract using it decides who can call it. The
-[reference](docs/reference.md#rebalancing) breaks down each step and its cost.
-
-### Why entries don't pack themselves
-
-Packing entries as they are created would group them by when they arrived, not by how they are
-used:
-
-- Each new entry would pay for an identity word and a sorted directory insert, roughly 40,000
-  gas or more, where starting at home costs about what a mapping entry does.
-- Entries created together are rarely the ones used together.
-- A map packs at most 1,016 entries, and those should be the busiest, not the first.
-
-So every entry starts at home, and only the ones worth grouping are packed.
+The [reference](docs/reference.md) covers the storage layout, each step's cost, and planning
+layouts.
 
 ## Using entries safely
 
-An `Entry` is a raw storage pointer, and so is a struct laid over one. A few rules keep them safe:
+A struct from `find` is a raw storage pointer:
 
-- **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes keep their contents at
-  slots derived from the entry's location, so a move would leave them behind. Keep them in their
-  own storage, keyed by the entry's key.
-- **Fit the width.** Offset `width` is already the next entry's identity word, so a struct may be
-  narrower than its map but never wider, and `read` and `write` offsets must stay below the width.
-  A map of one kind takes its width from the struct, so it always fits; a map of several kinds
-  checks each struct at deploy. Both measure a struct by array stride, which counts arrays, nested
-  structs and fields added later. The helper must be `view`, since the compiler treats indexing a
-  storage array as a possible read (error 2527), but it reads nothing;
-  [`test/TypedEntries.t.sol`](test/TypedEntries.t.sol) checks that and shows what a wider struct
-  breaks.
-- **Cast or bit-pack keys; hash only keys over 32 bytes.** pagepack hashes the map and key
-  together, so a key only has to be unique within its map. Cast a single value, such as an
-  address (`bytes32(uint256(uint160(account)))`), bit-pack a composite key that fits in 32 bytes,
-  as the exchange's `positionKey` packs a trader and a market, and hash only longer ones, since
-  hashing adds gas to every lookup. In a map of several kinds, tag each key with its kind so kinds
-  never collide.
-- **Look entries up again after anything that could rebalance.** An `Entry`, and a struct laid
-  over one, points wherever the entry was when you looked it up. Look it up again after anything
-  in the same transaction that could rebalance, including an external call that might re-enter.
+- **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes live at slots derived
+  from the entry's location, so a move leaves them behind.
+- **Fit the width.** The slot after a packed entry is the next one's identity word. A map of one
+  kind takes its width from the struct; a map of several kinds checks each with `requireFits`.
+- **Cast or bit-pack keys.** pagepack hashes keys already, so hash only keys over 32 bytes, and
+  tag each key with its kind in a map of several kinds.
+- **Look entries up again after anything that could rebalance**, including an external call that
+  might re-enter.
 
 ## Upgrades
 
-Upgradeable proxies aren't supported yet. These decide where entries live, so they are fixed
-once entries are written:
-
-- the map's name, and whether it keeps home hints;
-- its width, so a field that makes a typed map's struct wider moves the whole map;
-- the key encoding;
-- pagepack's own storage format, which isn't frozen before 1.0.
-
-A pinned-width variant, checked with `requireFits` like a map of several kinds, may become the
-upgrade path, leaving room to add fields. Contracts reach entries through typed modules, so their
-call sites won't change if it does.
-
-## Planning layouts
-
-pagepack applies layouts; choosing them happens off-chain. What a planner needs to know:
-
-- **Capacity.** A map packs up to 1,016 entries, at indices below 1,024. The rest stay at home,
-  a page each like mapping entries, and finding one still searches the directory unless it has a
-  `HOME` hint.
-- **Fingerprint collisions.** The directory knows entries by a 22-bit fingerprint, so two entries
-  with the same one can't both be packed. Among 1,016 random keys there's an 11.6% chance some
-  pair collides (3.1% at 512, 0.1% at 100). Check new placements with `fingerprintOf` and leave
-  one of each pair at home; otherwise `rebalance` reverts with `FingerprintCollision(key)`.
-- **Entry width.** All entries in a map have the same width, plus one identity word each when
-  packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-slot entries, 42 two-slot or
-  32 three-slot. Put fields that are used together in one entry, and rarely used fields in a
-  map of their own.
-- **Cost.** Packing costs about 39,000 gas per entry plus 18,000 to 20,000 per nonzero slot, so
-  large migrations take several transactions. Packing or evicting rebuilds the directory once per
-  call, which costs more as it fills. The [reference](docs/reference.md#rebalancing) has the
-  tables.
-- **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
-  cost. Measure that against the current layout, not against mappings: moving an entry that
-  already shares a page with the entries it is used with saves nothing.
-
-## Repository
-
-| Path | What's there |
-| --- | --- |
-| `src/` | The library: `PagePack.sol`, with the directory's bit-level format in `LibDirectory.sol` and a sort copied from Solady in `utils/`. No dependencies. |
-| `test/` | Unit, fuzz and invariant tests, example tests, and `test/gas/` benchmarks. |
-| `examples/orderbook/` | A typed map module to copy for each kind of entry: traders' balances in an order book. |
-| `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
-| `docs/` | Reference: lookup and rebalance details, and their costs. |
-| `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |
+Proxies aren't supported yet. A map's name, home-hint mode, width and key encoding decide where
+its entries live, so they can't change once entries are written, and pagepack's storage format
+may change before 1.0. A pinned-width variant may become the upgrade path.
 
 ## Development
 
-Requires [Foundry](https://getfoundry.sh). All execution uses Monad's gas schedule
-(`network = "monad"` in `foundry.toml`).
+Requires [Foundry](https://getfoundry.sh). Everything runs on Monad's gas schedule.
 
 ```bash
 make test   # unit, fuzz and invariant tests
-make gas    # benchmarks and the tables in this README and docs/
+make gas    # benchmarks; CI fails if snapshots/ is out of date
 make fmt
 ```
 
-CI checks gas snapshots. If a change moves any benchmark, run `make gas` and commit the updated
-`snapshots/` along with the change.
+## Audits
+
+pagepack has not been audited.
 
 ## License
 
