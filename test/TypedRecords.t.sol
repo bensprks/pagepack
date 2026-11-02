@@ -66,6 +66,17 @@ contract TypedRecordsTest is Test {
         assertEq(_overfullVaultWords(), VAULTS.width() + 1);
     }
 
+    /// The check's helpers must be `view`, not `pure`, yet they never touch storage.
+    function test_widthCheckTouchesNoStorage() public {
+        vm.record();
+        uint256 words = _vaultWords();
+        (bytes32[] memory reads, bytes32[] memory writes) = vm.accesses(address(this));
+
+        assertEq(words, 3);
+        assertEq(reads.length, 0);
+        assertEq(writes.length, 0);
+    }
+
     /// What the check prevents: a wider struct over a packed record writes into the next record's
     /// identity word, and the next record can no longer be found.
     function test_widerStructOverwritesTheNextRecord() public {
@@ -94,8 +105,10 @@ contract TypedRecordsTest is Test {
         assertEq(_vault(VAULTS.find(KEY)).debt, 500);
     }
 
-    // A struct's size in words is how far apart two of them sit in a storage array. Indexing a
-    // fixed-size array only computes the slot; nothing is read or written.
+    // A struct's size in words is how far apart two of them sit in a storage array. These helpers
+    // are `view` only because the compiler treats indexing a storage array as a possible read and
+    // rejects `pure`. Indexing a fixed-size array just computes a slot, so they read and write no
+    // storage.
 
     function _vaultWords() internal view returns (uint256 words) {
         Vault[2] storage pair;

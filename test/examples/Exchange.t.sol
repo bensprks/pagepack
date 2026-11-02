@@ -428,8 +428,10 @@ contract ExchangeRecordsTest is Test {
         assertEq(_marketWords(), width, "Market");
     }
 
-    // A struct's size in words is how far apart two of them sit in a storage array. Indexing a
-    // fixed-size array only computes the slot; nothing is read or written.
+    // A struct's size in words is how far apart two of them sit in a storage array. These helpers
+    // are `view` only because the compiler treats indexing a storage array as a possible read and
+    // rejects `pure`. Indexing a fixed-size array just computes a slot, so they read and write no
+    // storage.
 
     function _accountWords() internal view returns (uint256 words) {
         Exchange.Account[2] storage pair;
