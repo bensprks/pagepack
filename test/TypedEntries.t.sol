@@ -110,7 +110,7 @@ contract TypedEntriesTest is Test {
         new OverfullVaults();
     }
 
-    /// The size helper counts every slot a struct takes, arrays and nested structs included.
+    /// The size helper counts every slot a struct takes, arrays included.
     function test_sizeCountsEverySlot() public view {
         assertEq(overfullVaultSlots(), VAULTS.width() + 1);
     }

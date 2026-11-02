@@ -24,9 +24,9 @@ type PagedMap is bytes32;
 /// are used:
 /// - Offsets aren't bounds-checked. Offset `width` is already the next entry's identity word,
 ///   so a struct must be at most `width` slots. Take the width from the struct, or check it with
-///   {requireFits}: in a `T[2] storage` array placed at slot 0, element 1's slot is T's size in
-///   slots. Declare that helper `view`, not `pure`: the compiler treats indexing a storage array
-///   as a possible read, though nothing is read.
+///   {requireFits}. Either way, measure the struct with a helper: in a `T[2] storage` array placed
+///   at slot 0, element 1's slot is T's size in slots. Declare the helper `view`, not `pure`: the
+///   compiler treats indexing a storage array as a possible read, though nothing is read.
 /// - They go stale when the entry moves. Look the entry up again, and lay the struct over it
 ///   again, after anything in the same transaction that could rebalance, including an external
 ///   call that might re-enter.
