@@ -10,7 +10,7 @@ on every transaction, whether matching runs onchain against a resting book (like
 | [`Exchange.sol`](Exchange.sol) | Deposits, quoting with margin checks, settlement of a taker against makers. Storage-agnostic. |
 | [`ExchangeMap.sol`](ExchangeMap.sol) | The four entry structs and a typed pagepack map holding them, with their keys. |
 | [`PackedExchange.sol`](PackedExchange.sol) | Stores entries in the typed map and lets an admin rebalance. About 80 lines. |
-| [`MAINNET.md`](MAINNET.md) | What Perpl's mainnet traffic and storage look like, and what the gaps mean for its layout. |
+| [`MAINNET.md`](MAINNET.md) | What Perpl's mainnet traffic and storage look like, from a five-minute sample. |
 
 ## Why exchanges
 

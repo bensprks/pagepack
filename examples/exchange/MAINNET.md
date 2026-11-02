@@ -1,10 +1,10 @@
 # Perpl on Monad mainnet
 
-What Perpl's exchange actually does on mainnet, which storage it touches, and what that means
-for its layout under MIP-8. Everything here comes from public sources: Perpl's documentation and
-explainers, its published ABI, and read-only RPC queries (logs and `prestateTracer` traces).
-The traffic figures describe one five-minute sample (see [Sample](#sample)), not Perpl's traffic
-in general.
+Perpl's exchange traffic on Monad mainnet and the storage it touches. The exchange example's
+benchmarks are modelled on these transactions. Everything here comes from public sources: Perpl's
+documentation and explainers, its published ABI, and read-only RPC queries (logs and
+`prestateTracer` traces). The traffic figures describe one five-minute sample (see
+[Sample](#sample)), not Perpl's traffic in general.
 
 ## Traffic in the sample was quote management
 
@@ -39,7 +39,7 @@ Pages of exchange storage touched by representative transactions, from `prestate
 | Taker vs 14 makers | 121 read, 77 written | 94 read, 66 written |
 
 Almost every slot is on its own page. A page costs 8,100 gas the first time it is read in a
-transaction, so the 46-page re-quote pays about 370,000 gas in page loads before doing any work.
+transaction, so page loads for the 46-page re-quote cost about 370,000 gas.
 
 ## Where those slots are
 
@@ -61,32 +61,15 @@ The multi-market re-quote reads the perpetual struct and the position for **all 
 the account trades, because margin is checked across them. That is 12 pages before the order
 itself is touched.
 
-## What this means
+## How the example uses this
 
-Perpl's explainer concludes that MIP-8 is a marginal win, about 4% across its own gas suite,
-because single-slot positions, orders and order locks "each hash to their own scattered page",
-which it calls a floor that page-ification cannot lower. That floor is a consequence of keying
-every entry by hash. It is not a property of the data:
+The [exchange example](README.md) models the account side of these transactions: accounts,
+positions, orders and markets, with a margin check across every market an account holds. On the
+same transaction shapes, the packed version costs 50% less than the same exchange on mappings for
+the multi-market re-quote (51% with hints), and 53% less for the 14-maker fill (55% with hints).
 
-- **The same accounts touch the same entries all the time.** In the sample, three accounts sent
-  three quarters of the orders. Their accounts, positions, order entries and locks could share a
-  page or two each, instead of one page per entry.
-- **Margin checks read every market an account holds.** Putting each market's hot header slots
-  on one shared page turns six page loads into one.
-- **Order ids are already reused.** Allocating each account's orders within a block of ids, or
-  per-account slots as in this example, keeps a maker's orders on its own page.
-- **Neighbouring price levels are read together.** Storing price pointers and index words by
-  tick in contiguous storage, rather than by hash, puts adjacent levels on the same page.
-
-The explainer also names batched, multi-account forwarder flow as the regime its suite did not
-measure; in the sample, that was most of the traffic. The [example](README.md) models the account
-side of it: on the same transaction shapes, packing cuts the multi-market re-quote by 50% (51%
-with hints) and the 14-maker fill by 53% (55% with hints).
-
-These are the model's savings, not Perpl's. Perpl's transactions touch several times more pages
-than the model, so it may save more in absolute terms, but that is a hypothesis: the extra pages
-hold state the model doesn't have, such as the order-book index, price levels and funding, which
-may not consolidate the way account entries do.
+These are the model's numbers. The model has no order-book index, price levels or funding, which
+a real exchange also touches.
 
 ## Sample
 
