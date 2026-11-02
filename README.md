@@ -30,7 +30,7 @@ In a map that keeps home flags, a hint brings a record that was never packed wit
 mapping entry, at a storage cost described under [Planning layouts](#planning-layouts).
 
 In the [order-book exchange example](examples/exchange), modelled on the transactions that
-dominate Perpl on mainnet, a market maker's re-quote costs 52% less and a taker filling against
+dominate Perpl on mainnet, a market maker's re-quote costs 51% less and a taker filling against
 14 makers 55% less than the same exchange on mappings.
 
 ## How it works
@@ -121,8 +121,8 @@ keys ground to be packed could be, make the search fall back to bisection after 
 which caps it at 12.
 
 Each lookup without a hint searches again, even for a record found earlier in the call. Look a
-record up once per call and pass the `Record` along, as long as nothing in between could
-rebalance (see [Using records safely](#using-records-safely)).
+record up once per call and pass its struct or `Record` along, as long as nothing in between
+could rebalance (see [Using records safely](#using-records-safely)).
 
 ### Rebalancing
 
@@ -162,23 +162,29 @@ remapping points `pagepack/` at the repository root rather than `src/`, and the 
 pagepack/=lib/pagepack/src/
 ```
 
+Give each kind of record a typed map: copy
+[`examples/loans/LoanMap.sol`](examples/loans/LoanMap.sol) and rename its struct, key and
+functions. Contracts then use records as structs:
+
 ```solidity
-import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+import {PagePack} from "pagepack/PagePack.sol";
+import {LoanMap, loanMap} from "./LoanMap.sol";
 
-contract Vault {
-    PagedMap internal immutable BALANCES = PagePack.map("vault.balances", 1);
+contract Lender {
+    LoanMap internal immutable LOANS = loanMap("app.loans");
 
-    function balanceOf(address owner, uint256 id) external view returns (uint256) {
-        return BALANCES.find(_key(owner, id)).read(0);
+    function accrue(uint256 loanId, uint128 amount) external {
+        LOANS.find(loanId).interest += amount;
     }
 
     /// Hints are optional. Loaded once, they serve every lookup in the transaction.
-    function settle(Debit[] calldata debits, PagePack.Hint[] calldata hints) external {
-        BALANCES.useHints(hints);
+    function accrueAll(uint256[] calldata ids, uint128 amount, PagePack.Hint[] calldata hints)
+        external
+    {
+        LOANS.map().useHints(hints);
 
-        for (uint256 i; i < debits.length; ++i) {
-            Record r = BALANCES.find(_key(debits[i].owner, debits[i].id));
-            r.write(0, r.read(0) - debits[i].amount);
+        for (uint256 i; i < ids.length; ++i) {
+            LOANS.find(ids[i]).interest += amount;
         }
     }
 
@@ -186,80 +192,106 @@ contract Vault {
         external
         onlyAdmin
     {
-        BALANCES.rebalance(evictions, placements);
+        LOANS.map().rebalance(evictions, placements);
     }
 }
 ```
 
-`BALANCES.hintOf(key)` returns a record's hint, so an off-chain caller can build hints for a
-batch with one `eth_call`. `find(key, hint)` takes one hint directly instead. To give records
-that aren't packed a hint too, create the map with `PagePack.mapWithHomeHints(name, slots)`;
-see [Planning layouts](#planning-layouts) for what that costs.
+The module holds the `Loan` struct and a `LoanMap` type wrapping a `PagedMap`. `loanMap(name)`
+takes the map's width from the struct itself: in a `Loan[2] storage` array, the slot of the
+second element is the struct's size. `find(loanId)` returns `Loan storage` wherever the record
+lives, and Solidity handles the field offsets and packing. `loanKey(loanId)` gives the `bytes32`
+key that hints, layouts and off-chain tools use, and `map()` the underlying `PagedMap`.
 
-### Using records safely
-
-`read` and `write` take a slot offset. For named fields, declare a struct as wide as the map
-and lay it over the record, and Solidity handles the field offsets and packing:
-
-```solidity
-struct Account {
-    uint128 balance;
-    uint64 nonce;
-    uint64 updatedAt;
-}
-
-PagedMap internal immutable ACCOUNTS = PagePack.map("vault.accounts", 1);
-
-function _account(bytes32 key) internal view returns (Account storage account) {
-    Record r = ACCOUNTS.find(key);
-    assembly ("memory-safe") {
-        account.slot := r
-    }
-}
-```
+`LOANS.map().hintOf(loanKey(id))` returns a record's hint, so an off-chain caller can build hints
+for a batch with one `eth_call`. To give records that aren't packed a hint too, have the module
+create its map with `PagePack.mapWithHomeHints`; [Planning layouts](#planning-layouts) covers what
+that costs.
 
 Solidity reads and writes each field separately. To load the slot only once, read the fields you
 need in one statement and write the changed ones together, after any checks. Each extra field
-written still costs about 100 gas, where a hand-packed word is written once. The
-[exchange example](examples/exchange/Exchange.sol) keeps all of its records this way.
+written still costs about 100 gas, where a hand-packed word is written once.
+
+### Several kinds in one map
+
+Records only share pages with records in the same map, so entities used together, such as an
+account and its positions, belong in one map. Write one module for the map, with a getter and a
+key function per kind. Its width is set by hand, and the constructor function checks every struct
+against it with `requireFits`, so a struct that outgrows it stops the deploy:
+
+```solidity
+function exchangeMap(string memory name) view returns (ExchangeMap) {
+    PagedMap records = PagePack.mapWithHomeHints(name, 1);
+
+    records.requireFits(_accountSlots());
+    records.requireFits(_positionSlots());
+    records.requireFits(_orderSlots());
+    records.requireFits(_marketSlots());
+
+    return ExchangeMap.wrap(PagedMap.unwrap(records));
+}
+```
+
+The exchange example's [`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) works this way, with
+`RECORDS.account(trader)`, `RECORDS.position(trader, market)`, `RECORDS.order(trader, index)` and
+`RECORDS.market(market)`.
+
+### Records underneath
+
+A typed map is a thin layer over `PagedMap` and `Record`. `find(key)` on a `PagedMap` returns a
+`Record`, the slot where the record's data starts, and `read` and `write` use it a slot at a time:
+
+```solidity
+import {PagePack, PagedMap, Record} from "pagepack/PagePack.sol";
+
+PagedMap internal immutable BALANCES = PagePack.map("vault.balances", 1);
+
+function credit(bytes32 key, uint256 amount) internal {
+    Record r = BALANCES.find(key);
+    r.write(0, r.read(0) + amount);
+}
+```
+
+A typed getter lays its struct over the same slot. `find(key, hint)` takes one hint directly
+instead of loading hints with `useHints`.
+
+### Using records safely
 
 A `Record` is a raw storage pointer, and so is a struct laid over one. A few rules keep them safe:
 
 - **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes keep their contents at
   slots derived from the record's location, so a move would leave them behind. Keep them in their
   own storage, keyed by the record's key.
-- **Match the width.** A struct must be exactly as wide as its map, and `read` and `write`
-  offsets must stay below the width: offset `width` is already the next record's identity word.
-  Nothing checks either, so test each struct's size. Two elements of a storage array sit exactly
-  one struct apart, so the second one's slot is the size, counting arrays, nested structs and any
-  field added later:
-
-  ```solidity
-  function _accountSlots() internal view returns (uint256 slots) {
-      Account[2] storage pair;
-      assembly ("memory-safe") {
-          pair.slot := 0
-      }
-
-      Account storage second = pair[1];
-      assembly ("memory-safe") {
-          slots := second.slot
-      }
-  }
-
-  // In a test: assertEq(_accountSlots(), ACCOUNTS.width());
-  ```
-
-  Declare the helper `view`, not `pure`: the compiler treats indexing a storage array as a
-  possible storage read and rejects `pure` (error 2527). The helper still reads and writes no
-  storage, because indexing a fixed-size array only computes a slot.
-
-  [`test/TypedRecords.t.sol`](test/TypedRecords.t.sol) checks that it touches no storage and
-  shows what a wider struct breaks. The exchange's tests run the same check on each of its
-  records.
+- **Fit the width.** Offset `width` is already the next record's identity word, so a struct may be
+  narrower than its map but never wider, and `read` and `write` offsets must stay below the width.
+  A map of one kind takes its width from the struct, so it always fits; a map of several kinds
+  checks each struct at deploy. Both measure a struct by array stride, which counts arrays, nested
+  structs and fields added later. The helper must be `view`, since the compiler treats indexing a
+  storage array as a possible read (error 2527), but it reads nothing;
+  [`test/TypedRecords.t.sol`](test/TypedRecords.t.sol) checks that and shows what a wider struct
+  breaks.
+- **Cast or bit-pack keys; hash only keys over 32 bytes.** pagepack hashes the map and key
+  together, so a key only has to be unique within its map. Cast a single value
+  (`bytes32(loanId)`), bit-pack a composite key that fits in 32 bytes, as the exchange's
+  `positionKey` packs a trader and a market, and hash only longer ones, since hashing adds gas to
+  every lookup. In a map of several kinds, tag each key with its kind so kinds never collide.
 - **Look records up again after anything that could rebalance.** A `Record`, and a struct laid
   over one, points wherever the record was when you looked it up. Look it up again after anything
   in the same transaction that could rebalance, including an external call that might re-enter.
+
+## Upgrades
+
+Upgradeable proxies aren't supported yet. These decide where records live, so they are fixed
+once records are written:
+
+- the map's name, and whether it keeps home hints;
+- its width, so a field that makes a typed map's struct wider moves the whole map;
+- the key encoding;
+- pagepack's own storage format, which isn't frozen before 1.0.
+
+A pinned-width variant, checked with `requireFits` like a map of several kinds, may become the
+upgrade path, leaving room to add fields. Contracts reach records through typed modules, so their
+call sites won't change if it does.
 
 ## Planning layouts
 
@@ -277,7 +309,7 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
   map of their own.
 - **Schema changes.** A map's location comes from its name, width and mode, so widening a
   record makes a new map rather than appending to the old one. Moving to it means copying
-  records.
+  records; see [Upgrades](#upgrades).
 - **Home hints or compact storage.** A default map empties a record's home page when it packs
   it. A map made with `mapWithHomeHints` leaves a flag there instead, so a `HOME` hint can
   confirm a record isn't packed without loading the directory. Each flag is a live storage slot
@@ -333,6 +365,7 @@ pagepack applies layouts; choosing them happens off-chain. What a planner needs 
 | --- | --- |
 | `src/` | The library: `PagePack.sol`, with the directory's bit-level format in `LibDirectory.sol` and a sort copied from Solady in `utils/`. No dependencies. |
 | `test/` | Unit, fuzz and invariant tests, example tests, and `test/gas/` benchmarks. |
+| `examples/loans/` | A typed map module to copy for each kind of record. |
 | `examples/exchange/` | The account side of an order-book exchange: quoting, settlement and cross-margin, built on pagepack. |
 | `analysis/` | Off-chain tooling that chooses layouts from mainnet activity *(planned)*. |
 
