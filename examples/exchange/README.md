@@ -8,7 +8,8 @@ on every transaction, whether matching runs on-chain against a resting book (lik
 | File | What it does |
 | --- | --- |
 | [`Exchange.sol`](Exchange.sol) | Deposits, quoting with margin checks, settlement of a taker against makers. Storage-agnostic. |
-| [`PackedExchange.sol`](PackedExchange.sol) | Stores records with pagepack and lets an admin rebalance. About 50 lines. |
+| [`ExchangeMap.sol`](ExchangeMap.sol) | The record structs and a typed pagepack map holding all four kinds, with their keys. |
+| [`PackedExchange.sol`](PackedExchange.sol) | Stores records in the typed map and lets an admin rebalance. About 80 lines. |
 | [`MAINNET.md`](MAINNET.md) | What Perpl's mainnet traffic and storage look like, and what the gaps mean for its layout. |
 
 ## Why exchanges
@@ -25,11 +26,15 @@ every market's record on one shared page, and repack when activity shifts.
 
 ## Design
 
-**Records.** Accounts, positions, order slots and markets are all one-slot records with a
-`bytes32` key (`accountKey`, `positionKey`, `orderKey`, `marketKey`). `Exchange` asks
-`_locate(key)` where a record lives, lays the record's struct over that slot and does everything
-else itself. `PackedExchange` answers with pagepack; the benchmark baseline answers with a
-mapping. Both share every line of logic.
+**Records.** Accounts, positions, order slots and markets are all one-slot structs. `Exchange`
+asks a storage hook for each record (`_account(trader)`, `_position(trader, market)`,
+`_order(trader, index)`, `_market(market)`), works on the struct in place and does everything
+else itself. `PackedExchange` answers from `ExchangeMap`, a typed map holding all four kinds;
+the benchmark baseline answers from Solidity mappings. Both share every line of logic.
+
+`ExchangeMap` bit-packs each record's natural key into a `bytes32` with its kind in the top
+byte (`accountKey`, `positionKey`, `orderKey`, `marketKey`), for hints and layouts. Its width is
+pinned at one slot, and creating it checks that every struct fits.
 
 **One lookup per record per call.** Without a hint, every pagepack lookup searches the map's
 directory. A call keeps the records of the market it is working in, so a settlement locates the
@@ -79,15 +84,15 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 158,865 | 79,196 (-50%) | 76,647 (-52%) |
-| Re-quote 3 orders, one market | 106,141 | 74,033 (-30%) | 66,855 (-37%) |
-| Taker vs 3 makers | 207,067 | 126,535 (-39%) | 118,072 (-43%) |
-| Taker vs 14 makers | 708,083 | 330,183 (-53%) | 319,850 (-55%) |
+| Re-quote 1 order, maker in 6 markets | 158,495 | 79,740 (-50%) | 77,191 (-51%) |
+| Re-quote 3 orders, one market | 106,006 | 74,247 (-30%) | 67,069 (-37%) |
+| Taker vs 3 makers | 206,535 | 126,779 (-39%) | 118,316 (-43%) |
+| Taker vs 14 makers | 706,264 | 330,823 (-53%) | 320,490 (-55%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 86,572 |
-| New order in a reused slot | 69,572 (-20%) |
+| New order in a never-used slot | 86,442 |
+| New order in a reused slot | 69,442 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.
@@ -99,12 +104,12 @@ account; the others quote one market. The taker is a long-tail account and is no
 
   | Map name | pagepack |
   | --- | ---: |
-  | pagepack.exchange | 330,183 |
-  | pagepack.exchange.1 | 330,839 |
-  | pagepack.exchange.2 | 333,851 |
-  | pagepack.exchange.3 | 329,538 |
-  | pagepack.exchange.4 | 335,612 |
-  | pagepack.exchange.5 | 329,421 |
+  | pagepack.exchange | 330,823 |
+  | pagepack.exchange.1 | 331,479 |
+  | pagepack.exchange.2 | 334,491 |
+  | pagepack.exchange.3 | 330,178 |
+  | pagepack.exchange.4 | 336,252 |
+  | pagepack.exchange.5 | 330,061 |
 
   Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
