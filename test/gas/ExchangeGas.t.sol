@@ -5,6 +5,12 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PagePack} from "pagepack/PagePack.sol";
 import {Exchange} from "../../examples/exchange/Exchange.sol";
+import {
+    accountKey,
+    marketKey,
+    orderKey,
+    positionKey
+} from "../../examples/exchange/ExchangeMap.sol";
 import {PackedExchange} from "../../examples/exchange/PackedExchange.sol";
 import {MappingExchange} from "../examples/utils/MappingExchange.sol";
 import {TestToken} from "../examples/utils/TestToken.sol";
@@ -207,16 +213,16 @@ contract ExchangeGasTest is Test {
             address maker = makers[1 + i];
             fills[i] = Exchange.Fill(maker, 0, 1);
 
-            keys[3 * i] = exchange.accountKey(maker);
-            keys[3 * i + 1] = exchange.orderKey(maker, 0);
-            keys[3 * i + 2] = exchange.positionKey(maker, BOOK);
+            keys[3 * i] = accountKey(maker);
+            keys[3 * i + 1] = orderKey(maker, 0);
+            keys[3 * i + 2] = positionKey(maker, BOOK);
         }
-        keys[count * 3] = exchange.marketKey(BOOK);
-        keys[count * 3 + 1] = exchange.accountKey(fees);
+        keys[count * 3] = marketKey(BOOK);
+        keys[count * 3 + 1] = accountKey(fees);
 
         // The operator knows the taker too, though its records aren't packed.
-        keys[count * 3 + 2] = exchange.accountKey(taker);
-        keys[count * 3 + 3] = exchange.positionKey(taker, BOOK);
+        keys[count * 3 + 2] = accountKey(taker);
+        keys[count * 3 + 3] = positionKey(taker, BOOK);
 
         PagePack.Hint[] memory hints = hinted ? _hints(keys) : _none();
         _coolIfHinted(exchange, hinted);
@@ -247,21 +253,21 @@ contract ExchangeGasTest is Test {
 
     function _makerKeys(address maker, uint8 orders, uint8 positions)
         internal
-        view
+        pure
         returns (bytes32[] memory keys)
     {
         keys = new bytes32[](1 + orders + 2 * positions);
-        keys[0] = packedExchange.accountKey(maker);
+        keys[0] = accountKey(maker);
 
         for (uint8 i; i < orders; ++i) {
-            keys[1 + i] = packedExchange.orderKey(maker, i);
+            keys[1 + i] = orderKey(maker, i);
         }
 
         // A single-market maker trades in the book market; maker 0 holds markets 0-5.
         for (uint8 i; i < positions; ++i) {
             uint8 market = positions == 1 ? BOOK : i;
-            keys[1 + orders + 2 * i] = packedExchange.positionKey(maker, market);
-            keys[2 + orders + 2 * i] = packedExchange.marketKey(market);
+            keys[1 + orders + 2 * i] = positionKey(maker, market);
+            keys[2 + orders + 2 * i] = marketKey(market);
         }
     }
 
@@ -350,9 +356,9 @@ contract ExchangeGasTest is Test {
 
         bytes32[] memory shared = new bytes32[](MARKETS + 1);
         for (uint8 m; m < MARKETS; ++m) {
-            shared[m] = exchange.marketKey(m);
+            shared[m] = marketKey(m);
         }
-        shared[MARKETS] = exchange.accountKey(fees);
+        shared[MARKETS] = accountKey(fees);
 
         (count, next) = _placeGroup(placements, count, next, shared);
 
@@ -387,14 +393,14 @@ contract ExchangeGasTest is Test {
         uint8 positions = index == 0 ? 6 : 1;
 
         keys = new bytes32[](1 + orders + positions);
-        keys[0] = packedExchange.accountKey(maker);
+        keys[0] = accountKey(maker);
 
         for (uint8 s; s < orders; ++s) {
-            keys[1 + s] = packedExchange.orderKey(maker, s);
+            keys[1 + s] = orderKey(maker, s);
         }
 
         for (uint8 p; p < positions; ++p) {
-            keys[1 + orders + p] = packedExchange.positionKey(maker, index == 0 ? p : BOOK);
+            keys[1 + orders + p] = positionKey(maker, index == 0 ? p : BOOK);
         }
     }
 
