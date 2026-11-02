@@ -1,11 +1,11 @@
 # pagepack
 
-A Solidity library for Monad that moves storage entries used together onto shared pages, so
-transactions that touch many of them cost less.
+A Solidity library for Monad that lets you move storage entries that are used together onto the
+same MIP-8 pages, to reduce gas costs by up to 82%.
 
 **Storage on Monad.** Under [MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md),
 Monad groups each contract's storage into pages of 128 consecutive slots. The first slot a
-transaction touches on a page costs 8,100 gas; every other slot on that page then costs 100.
+transaction touches on a page costs 8,100 gas. Every other slot on that page costs 100.
 
 **Problem.** A Solidity mapping stores each value at `keccak256(key, slot)`
 ([Solidity docs](https://docs.soliditylang.org/en/latest/internals/layout_in_storage.html#mappings-and-dynamic-arrays)),
@@ -48,10 +48,10 @@ Updating existing one-slot balances in one transaction, from `make gas` on Monad
 | 64 entries, a full page | 775,423 | 215,318 (-72%) | 138,313 (-82%) |
 | 2 unpacked entries | 45,309 | 56,398 (+24%) | – |
 
-A page holds 64 packed one-slot entries, because each is stored with an identity word. Entries
-that aren't packed cost more than mapping entries, since a lookup still searches the directory;
-[the full table](docs/reference.md#results) includes maps whose `HOME` hints bring them within
-6%.
+A page holds 64 one-slot entries, not 128, because each packed entry is stored next to a one-slot
+identity word. Entries that aren't packed cost more than in a regular mapping, because the lookup
+still searches the directory. In a map created with `mapWithHomeHints`, a `HOME` hint reduces this
+to +6% (see the [full table](docs/reference.md#results)).
 
 ## Usage
 
@@ -61,7 +61,9 @@ forge install bensprks/pagepack
 
 Add `pagepack/=lib/pagepack/src/` to `remappings.txt`. Then copy
 [`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) for each struct you
-store, renaming the struct, key and functions. Here an order book pays the makers a buy fills:
+store, renaming the struct, key and functions.
+
+Example: when a buy order fills several asks, the order book credits each ask's maker:
 
 ```solidity
 import {PagePack} from "pagepack/PagePack.sol";
@@ -117,10 +119,10 @@ the map's width with `requireFits` at deploy. To work with raw slots instead of 
 
 An entry lives in one of two places:
 
-- **Home**, at `keccak256(map, key)` rounded down to a page start: a page per entry, like a
-  mapping. Every entry starts here.
-- **Packed**, side by side on the map's packed pages, where `rebalance` puts it. Each packed
-  entry follows an identity word, `keccak256(map, key)`, so a page holds
+- **Home**: `keccak256(map, key)`, rounded down to the start of a page. Each entry has its own
+  home page, as in a regular mapping. Every entry starts at home.
+- **Packed**: a position on the map's packed pages, assigned by `rebalance`. Each packed entry is
+  stored after an identity word, `keccak256(map, key)`, so a page holds
   `floor(128 / (width + 1))` entries: 64 one-slot or 42 two-slot.
 
 A **directory** page lists the packed entries by fingerprint. `find(key)` checks the hint if
@@ -132,10 +134,10 @@ gas but never returns the wrong entry.
 them with the transaction, and the contract loads them once with `useHints`. Maps made with
 `mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 
-**Rebalancing** names only the entries that move and applies as one step, so swaps work. Packing
-a one-slot entry costs about 58,000 gas and swapping two about 60,000. pagepack has no access
-control: your contract decides who rebalances. Entries never pack themselves, because the
-busiest entries are rarely the first ones created.
+**Rebalancing** takes a list of entries to move and their new positions, and applies all moves at
+once, so two entries can swap positions. Packing a one-slot entry costs about 58,000 gas. Swapping
+two packed entries costs about 60,000. pagepack has no access control: your contract decides who
+rebalances. New entries always start on their home pages. Only `rebalance` packs them.
 
 The [reference](docs/reference.md) covers the storage layout, each step's cost, and planning
 layouts.
@@ -147,17 +149,20 @@ A struct from `find` is a raw storage pointer:
 - **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes live at slots derived
   from the entry's location, so a move leaves them behind.
 - **Fit the width.** The slot after a packed entry is the next one's identity word. A map of one
-  kind takes its width from the struct; a map of several kinds checks each with `requireFits`.
-- **Cast or bit-pack keys.** pagepack hashes keys already, so hash only keys over 32 bytes, and
-  tag each key with its kind in a map of several kinds.
+  kind takes its width from the struct. A map of several kinds checks each struct with
+  `requireFits`.
+- **Cast or bit-pack keys.** pagepack already hashes the key, so don't hash keys that fit in 32
+  bytes. In a map of several kinds, include the kind in the key so keys of different kinds can't
+  collide.
 - **Look entries up again after anything that could rebalance**, including an external call that
   might re-enter.
 
 ## Upgrades
 
-Proxies aren't supported yet. A map's name, home-hint mode, width and key encoding decide where
-its entries live, so they can't change once entries are written, and pagepack's storage format
-may change before 1.0. A pinned-width variant may become the upgrade path.
+Proxies aren't supported yet. A map's name, home-hint mode, width and key encoding determine where
+its entries are stored, so they can't change after entries are written. pagepack's own storage
+format may change before 1.0. A future version may support upgrades using maps with a fixed width
+set in advance, leaving room for structs to grow.
 
 ## Development
 

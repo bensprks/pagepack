@@ -87,8 +87,8 @@ The **directory** lists every packed entry by a 22-bit fingerprint with its pack
 A hint is a packed entry's index plus one, or `HOME` for an entry that isn't packed. An
 offchain caller gets a batch's hints from `hintOf(key)` in one `eth_call`. The contract loads
 them with `useHints`, which keeps them in transient storage so every lookup in the transaction
-picks its hint up; `find(key, hint)` takes a single hint directly. `HOME` only works in maps made
-with `mapWithHomeHints`; other maps ignore it.
+picks its hint up. `find(key, hint)` takes a single hint directly. `HOME` only works in maps made
+with `mapWithHomeHints`. Other maps ignore it.
 
 A lookup without a hint searches the directory again even for an entry found earlier in the
 call, so look an entry up once per call and pass its struct along, as long as nothing in between
@@ -147,7 +147,7 @@ holds, mostly MIP-8's charge for new storage slots. Slots that are still zero co
 | 1-slot entries, never written, home-hint map | 58,396 |
 
 Filling a map of 1,016 one-slot entries takes about 55M gas, so split large migrations into
-transactions sized from the table above; listing new entries in fingerprint order also skips a
+transactions sized from the table above. Listing new entries in fingerprint order also skips a
 sort. After that, a rebalance costs what it changes. Swapping two entries costs about 60,000 gas
 at any size. Packing or evicting rebuilds the directory once per call, which grows with the
 number of packed entries. Evicting also pays 17,000 gas for the entry's home slot in a default
@@ -192,14 +192,14 @@ so switching means migrating.
 
 ## Planning layouts
 
-pagepack applies layouts; choosing them happens offchain. What a planner needs to know:
+pagepack applies layouts. Choosing them happens offchain. What a planner needs to know:
 
 - **Capacity.** A map packs up to 1,016 entries, at indices below 1,024. The rest stay at home,
   a page each like mapping entries, and finding one still searches the directory unless it has a
   `HOME` hint.
 - **Fingerprint collisions.** Two entries with the same fingerprint can't both be packed. Among
   1,016 random keys there's an 11.6% chance some pair collides (3.1% at 512, 0.1% at 100). Check
-  new placements with `fingerprintOf` and leave one of each pair at home; otherwise `rebalance`
+  new placements with `fingerprintOf` and leave one of each pair at home. Otherwise `rebalance`
   reverts with `FingerprintCollision(key)`.
 - **Entry width.** All entries in a map have the same width, plus one identity word each when
   packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-slot entries, 42 two-slot or
@@ -220,7 +220,7 @@ A typed map module, like [`BalanceMap.sol`](../examples/orderbook/BalanceMap.sol
 - **Width.** The module measures its struct by array stride: in a `T[2] storage` array placed at
   slot 0, element 1's slot is T's size in slots. That counts arrays, nested structs and fields
   added later. The helper must be `view`, since the compiler treats indexing a storage array as a
-  possible read (error 2527), but it reads nothing;
+  possible read (error 2527), but it reads nothing.
   [`test/TypedEntries.t.sol`](../test/TypedEntries.t.sol) checks that and shows what a wider
   struct breaks.
 - **Fields.** Solidity reads and writes each field separately. To load the slot only once, read
