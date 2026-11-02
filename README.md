@@ -59,7 +59,9 @@ to +6% (see the [full table](docs/reference.md#results)).
 forge install bensprks/pagepack
 ```
 
-Add `pagepack/=lib/pagepack/src/` to `remappings.txt`. Then copy
+pagepack uses transient storage, so it needs Solidity 0.8.24 or later with `evm_version` set to
+`cancun` or later (the default from 0.8.25). Add `pagepack/=lib/pagepack/src/` to
+`remappings.txt`. Then copy
 [`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) for each struct you
 store, renaming the struct, key and functions.
 
@@ -166,7 +168,8 @@ set in advance, leaving room for structs to grow.
 
 ## Development
 
-Requires [Foundry](https://getfoundry.sh). Everything runs on Monad's gas schedule.
+Requires [Foundry](https://getfoundry.sh) v1.8.6 or later, the version CI uses. `foundry.toml`
+sets `network = "monad"`, so tests and benchmarks run on Monad's gas schedule.
 
 ```bash
 make test   # unit, fuzz and invariant tests
