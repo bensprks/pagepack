@@ -55,17 +55,8 @@ to +6% (see the [full table](docs/reference.md#results)).
 
 ## Usage
 
-```bash
-forge install bensprks/pagepack
-```
-
-pagepack uses transient storage, so it needs Solidity 0.8.24 or later with `evm_version` set to
-`cancun` or later (the default from 0.8.25). Add `pagepack/=lib/pagepack/src/` to
-`remappings.txt`. Then copy
-[`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) for each struct you
-store, renaming the struct, key and functions.
-
-Example: when a buy order fills several asks, the order book credits each ask's maker:
+Example: when a buy order fills several asks, the order book credits each ask's maker.
+`BalanceMap` is a small module you copy into your project (see [Setup](#setup)).
 
 ```solidity
 import {PagePack} from "pagepack/PagePack.sol";
@@ -116,6 +107,20 @@ its positions, in one map with a getter per kind. The exchange's
 [`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) does this, checking each struct against
 the map's width with `requireFits` at deploy. To work with raw slots instead of structs, see
 [using `PagedMap` directly](docs/reference.md#using-pagedmap-directly).
+
+### Setup
+
+1. Install pagepack:
+
+   ```bash
+   forge install bensprks/pagepack
+   ```
+
+2. Add `pagepack/=lib/pagepack/src/` to `remappings.txt`.
+3. Compile with Solidity 0.8.24 or later and `evm_version` set to `cancun` or later. pagepack
+   uses transient storage. Cancun is the default from Solidity 0.8.25.
+4. Copy [`examples/orderbook/BalanceMap.sol`](examples/orderbook/BalanceMap.sol) once for each
+   struct you store, and rename the struct, key and functions.
 
 ## How it works
 
