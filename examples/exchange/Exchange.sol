@@ -19,18 +19,43 @@ import {PagePack, Record} from "pagepack/PagePack.sol";
 /// lives is left to {_locate}. The PagePack version and the plain-mapping baseline share all of
 /// the logic below, so benchmarks comparing them measure storage layout and nothing else.
 ///
-/// Records, one word each:
-///
-///   account    balance u128 | locked order margin u64 | bitmap of markets with a position u64
-///   position   size int128 | cost int128, the signed sum of size × price, so a position's
-///              equity is size × mark − cost
-///   order      price u64 | size u64 | market u8 | isAsk bit. Each account has ORDER_SLOTS
-///              reusable slots instead of a fresh storage entry per order.
-///   market     mark price u64 | margin bps u16 | taker fee bps u16 | last price u64 | volume u96
+/// Each kind of record is a struct one word wide, read and written in place through the slot
+/// {_locate} returns, so Solidity packs and unpacks the fields.
 abstract contract Exchange {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
     using SafeCast for int256;
+
+    // Records. Solidity packs each struct's fields into one word in declaration order, starting
+    // from the lowest bits.
+
+    struct Account {
+        uint128 balance;
+        uint64 locked; // margin locked by resting orders
+        uint64 markets; // bitmap of markets with a position; markets are numbered below 64
+    }
+
+    /// A position's equity is size × mark − cost.
+    struct Position {
+        int128 size;
+        int128 cost; // the signed sum of size × price
+    }
+
+    /// Each account reuses ORDER_SLOTS order slots rather than a fresh storage entry per order.
+    struct Order {
+        uint64 price;
+        uint64 size;
+        uint8 market;
+        bool isAsk;
+    }
+
+    struct Market {
+        uint64 markPrice;
+        uint16 marginBps;
+        uint16 takerFeeBps;
+        uint64 lastPrice;
+        uint96 volume;
+    }
 
     /// One change to a resting order. Size 0 cancels the order in that slot.
     struct QuoteUpdate {
@@ -81,9 +106,6 @@ abstract contract Exchange {
     uint256 private constant ORDER = 3 << 248;
     uint256 private constant MARKET = 4 << 248;
 
-    uint256 private constant U64 = type(uint64).max;
-    uint256 private constant U128 = type(uint128).max;
-
     IERC20 public immutable collateral;
     address public immutable admin;
     address public immutable operator;
@@ -119,19 +141,20 @@ abstract contract Exchange {
     {
         if (market >= MAX_MARKETS || markPrice == 0) revert UnknownMarket(market);
 
-        Record record = _locate(marketKey(market));
-        if (record.read(0) != 0) revert MarketExists(market);
+        Market storage record = _asMarket(_locate(marketKey(market)));
+        if (record.markPrice != 0) revert MarketExists(market);
 
-        record.write(0, _packMarket(markPrice, marginBps, takerFeeBps, 0, 0));
+        record.markPrice = markPrice;
+        record.marginBps = marginBps;
+        record.takerFeeBps = takerFeeBps;
     }
 
     /// @notice Stand-in for an oracle update.
     function setMarkPrice(uint8 market, uint64 markPrice) external onlyAdmin {
-        Record record = _locate(marketKey(market));
-        (, uint256 marginBps, uint256 feeBps, uint256 last, uint256 volume) =
-            _unpackMarket(_readMarket(record, market));
+        // A zero mark price would let every position in the market go without margin.
+        if (markPrice == 0) revert InvalidPrice();
 
-        record.write(0, _packMarket(markPrice, marginBps, feeBps, last, volume));
+        _listedMarket(_locate(marketKey(market)), market).markPrice = markPrice;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -141,21 +164,21 @@ abstract contract Exchange {
     function deposit(uint256 amount) external {
         collateral.safeTransferFrom(msg.sender, address(this), amount);
 
-        Record account = _locate(accountKey(msg.sender));
-        (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
-        account.write(0, _packAccount(balance + amount, locked, markets));
+        Account storage account = _asAccount(_locate(accountKey(msg.sender)));
+        account.balance = (account.balance + amount).toUint128();
 
         emit Deposited(msg.sender, amount);
     }
 
     function withdraw(uint256 amount, PagePack.Hint[] calldata hints) external withHints(hints) {
-        Record account = _locate(accountKey(msg.sender));
-        (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
+        Account storage account = _asAccount(_locate(accountKey(msg.sender)));
+        (uint256 balance, uint256 locked, uint256 markets) =
+            (account.balance, account.locked, account.markets);
 
         if (amount > balance) revert InsufficientBalance(msg.sender);
         balance -= amount;
 
-        account.write(0, _packAccount(balance, locked, markets));
+        account.balance = uint128(balance);
         _requireMargin(msg.sender, int256(balance), locked, markets);
 
         collateral.safeTransfer(msg.sender, amount);
@@ -174,30 +197,35 @@ abstract contract Exchange {
         external
         withHints(hints)
     {
-        Record account = _locate(accountKey(msg.sender));
-        (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
+        Account storage account = _asAccount(_locate(accountKey(msg.sender)));
+        (uint256 balance, uint256 locked, uint256 markets) =
+            (account.balance, account.locked, account.markets);
 
         for (uint256 i; i < updates.length; ++i) {
-            QuoteUpdate calldata u = updates[i];
+            QuoteUpdate memory u = updates[i];
             if (u.slot >= ORDER_SLOTS) revert InvalidSlot(u.slot);
 
             // A live order needs a nonzero price: cancelling keeps only the price, market and side,
             // so a zero-price bid in market 0 would empty its slot to zero and lose slot reuse.
             if (u.size != 0 && u.price == 0) revert InvalidPrice();
 
-            Record order = _locate(orderKey(msg.sender, u.slot));
-            uint256 previous = order.read(0);
-            uint256 next = u.size == 0
-                ? _withSize(previous, 0)
-                : _packOrder(u.price, u.size, u.market, u.isAsk);
+            Order storage order = _asOrder(_locate(orderKey(msg.sender, u.slot)));
+            locked = locked - _orderMargin(order.price, order.size, order.market)
+                + _orderMargin(u.price, u.size, u.market);
 
-            locked = locked - _orderMargin(previous) + _orderMargin(next);
-            order.write(0, next);
+            if (u.size == 0) {
+                order.size = 0;
+            } else {
+                order.price = u.price;
+                order.size = u.size;
+                order.market = u.market;
+                order.isAsk = u.isAsk;
+            }
 
             emit OrderUpdated(msg.sender, u.slot, u.market, u.isAsk, u.price, u.size);
         }
 
-        account.write(0, _packAccount(balance, locked, markets));
+        account.locked = locked.toUint64();
         _requireMargin(msg.sender, int256(balance), locked, markets);
     }
 
@@ -219,8 +247,9 @@ abstract contract Exchange {
     {
         if (msg.sender != operator) revert NotOperator();
 
-        Record account = _locate(accountKey(taker));
-        (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
+        Account storage account = _asAccount(_locate(accountKey(taker)));
+        (uint256 balance, uint256 locked, uint256 markets) =
+            (account.balance, account.locked, account.markets);
 
         // The taker's account is written once after the whole batch rather than once per fill.
         (int256 realized, uint256 fees, uint256 newMarkets) = _settleFills(taker, fills, markets);
@@ -228,7 +257,8 @@ abstract contract Exchange {
         int256 cash = int256(balance) + realized - int256(fees);
         if (cash < 0) revert InsufficientBalance(taker);
 
-        account.write(0, _packAccount(uint256(cash), locked, newMarkets));
+        account.balance = uint256(cash).toUint128();
+        account.markets = uint64(newMarkets);
         _credit(feeRecipient, fees);
 
         _requireMargin(taker, cash, locked, newMarkets);
@@ -243,7 +273,8 @@ abstract contract Exchange {
         view
         returns (uint256 balance, uint256 locked, uint256 markets)
     {
-        return _unpackAccount(_locate(accountKey(account)).read(0));
+        Account storage record = _asAccount(_locate(accountKey(account)));
+        return (record.balance, record.locked, record.markets);
     }
 
     function positionOf(address account, uint8 market)
@@ -251,7 +282,8 @@ abstract contract Exchange {
         view
         returns (int256 size, int256 cost)
     {
-        return _unpackPosition(_locate(positionKey(account, market)).read(0));
+        Position storage record = _asPosition(_locate(positionKey(account, market)));
+        return (record.size, record.cost);
     }
 
     function orderOf(address account, uint8 slot)
@@ -259,7 +291,8 @@ abstract contract Exchange {
         view
         returns (uint256 price, uint256 size, uint8 market, bool isAsk)
     {
-        return _unpackOrder(_locate(orderKey(account, slot)).read(0));
+        Order storage record = _asOrder(_locate(orderKey(account, slot)));
+        return (record.price, record.size, record.market, record.isAsk);
     }
 
     function marketOf(uint8 market)
@@ -267,7 +300,15 @@ abstract contract Exchange {
         view
         returns (uint256 markPrice, uint256 marginBps, uint256 feeBps, uint256 last, uint256 volume)
     {
-        return _unpackMarket(_locate(marketKey(market)).read(0));
+        Market storage record = _asMarket(_locate(marketKey(market)));
+        return
+            (
+                record.markPrice,
+                record.marginBps,
+                record.takerFeeBps,
+                record.lastPrice,
+                record.volume
+            );
     }
 
     // ------------------------------------------------------------------------------------------
@@ -301,6 +342,38 @@ abstract contract Exchange {
 
     /// Makes `hints` available to every {_locate} in this transaction.
     function _useHints(PagePack.Hint[] calldata hints) internal virtual;
+
+    // ------------------------------------------------------------------------------------------
+    // Typed records
+    // ------------------------------------------------------------------------------------------
+
+    // Each struct is exactly one word, the width of a record, so it never reaches past its own
+    // record. A struct pointer goes stale when its record moves: none is held across the
+    // collateral transfers, the only external calls that could reach a rebalance.
+
+    function _asAccount(Record r) internal pure returns (Account storage account) {
+        assembly ("memory-safe") {
+            account.slot := r
+        }
+    }
+
+    function _asPosition(Record r) internal pure returns (Position storage position) {
+        assembly ("memory-safe") {
+            position.slot := r
+        }
+    }
+
+    function _asOrder(Record r) internal pure returns (Order storage order) {
+        assembly ("memory-safe") {
+            order.slot := r
+        }
+    }
+
+    function _asMarket(Record r) internal pure returns (Market storage market) {
+        assembly ("memory-safe") {
+            market.slot := r
+        }
+    }
 
     // ------------------------------------------------------------------------------------------
     // Settlement internals
@@ -364,15 +437,14 @@ abstract contract Exchange {
         private
         returns (uint8 market, uint256 price, bool makerSold, uint256 size)
     {
-        Record order = _locate(orderKey(f.maker, f.slot));
-        uint256 word = order.read(0);
+        Order storage order = _asOrder(_locate(orderKey(f.maker, f.slot)));
 
-        (price, size, market, makerSold) = _unpackOrder(word);
+        (market, price, makerSold, size) = (order.market, order.price, order.isAsk, order.size);
         if (f.size > size) revert InvalidFill();
 
         // The slot keeps its other fields when emptied, so reusing it later overwrites a nonzero
         // word and avoids MIP-8's 17,000 gas charge for growing state.
-        order.write(0, _withSize(word, size - f.size));
+        order.size -= f.size;
     }
 
     /// Updates the market's last price and volume, and returns its margin and fee rates.
@@ -380,12 +452,12 @@ abstract contract Exchange {
         private
         returns (uint256 marginBps, uint256 feeBps)
     {
-        Record record = _locate(marketKey(market));
-        uint256 markPrice;
-        uint256 volume;
-        (markPrice, marginBps, feeBps,, volume) = _unpackMarket(_readMarket(record, market));
+        Market storage record = _listedMarket(_locate(marketKey(market)), market);
 
-        record.write(0, _packMarket(markPrice, marginBps, feeBps, price, volume + size));
+        record.lastPrice = price.toUint64();
+        record.volume = (record.volume + size).toUint96();
+
+        return (record.marginBps, record.takerFeeBps);
     }
 
     function _settleMaker(
@@ -395,16 +467,20 @@ abstract contract Exchange {
         uint256 price,
         uint256 releasedMargin
     ) private {
-        Record account = _locate(accountKey(maker));
-        (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(account.read(0));
+        Account storage account = _asAccount(_locate(accountKey(maker)));
+        (uint256 balance, uint256 locked, uint256 markets) =
+            (account.balance, account.locked, account.markets);
 
         int256 realized;
         (realized, markets) = _applyToPosition(maker, market, delta, price, markets);
+        locked -= releasedMargin;
 
         int256 cash = int256(balance) + realized;
         if (cash < 0) revert InsufficientBalance(maker);
 
-        account.write(0, _packAccount(uint256(cash), locked - releasedMargin, markets));
+        account.balance = uint256(cash).toUint128();
+        account.locked = uint64(locked);
+        account.markets = uint64(markets);
     }
 
     /// Adds `delta` lots at `price` to a position. A position that closes realizes its profit
@@ -416,8 +492,8 @@ abstract contract Exchange {
         uint256 price,
         uint256 markets
     ) private returns (int256 realized, uint256) {
-        Record position = _locate(positionKey(account, market));
-        (int256 size, int256 cost) = _unpackPosition(position.read(0));
+        Position storage position = _asPosition(_locate(positionKey(account, market)));
+        (int256 size, int256 cost) = (position.size, position.cost);
 
         size += delta;
         cost += delta * int256(price);
@@ -430,15 +506,13 @@ abstract contract Exchange {
             markets |= uint256(1) << market;
         }
 
-        position.write(0, _packPosition(size, cost));
+        (position.size, position.cost) = (size.toInt128(), cost.toInt128());
         return (realized, markets);
     }
 
     function _credit(address account, uint256 amount) private {
-        Record record = _locate(accountKey(account));
-        (uint256 balance, uint256 locked, uint256 markets) = _unpackAccount(record.read(0));
-
-        record.write(0, _packAccount(balance + amount, locked, markets));
+        Account storage record = _asAccount(_locate(accountKey(account)));
+        record.balance = (record.balance + amount).toUint128();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -457,10 +531,12 @@ abstract contract Exchange {
 
         for (uint256 market; markets != 0; ++market) {
             if (markets & 1 != 0) {
-                (int256 size, int256 cost) =
-                    _unpackPosition(_locate(positionKey(account, uint8(market))).read(0));
-                (uint256 markPrice, uint256 marginBps,,,) =
-                    _unpackMarket(_locate(marketKey(uint8(market))).read(0));
+                Position storage position =
+                    _asPosition(_locate(positionKey(account, uint8(market))));
+                Market storage record = _asMarket(_locate(marketKey(uint8(market))));
+
+                (int256 size, int256 cost) = (position.size, position.cost);
+                (uint256 markPrice, uint256 marginBps) = (record.markPrice, record.marginBps);
 
                 equity += size * int256(markPrice) - cost;
                 required += _abs(size) * markPrice * marginBps / BPS;
@@ -473,13 +549,14 @@ abstract contract Exchange {
     }
 
     /// Margin an order locks while it rests.
-    function _orderMargin(uint256 order) private view returns (uint256) {
-        (uint256 price, uint256 size, uint8 market,) = _unpackOrder(order);
+    function _orderMargin(uint256 price, uint256 size, uint8 market)
+        private
+        view
+        returns (uint256)
+    {
         if (size == 0) return 0;
 
-        (, uint256 marginBps,,,) = _unpackMarket(_readMarket(_locate(marketKey(market)), market));
-
-        return _margin(size, price, marginBps);
+        return _margin(size, price, _listedMarket(_locate(marketKey(market)), market).marginBps);
     }
 
     /// Margin freed by filling `filled` of an order with `remaining` left: what the order
@@ -503,84 +580,11 @@ abstract contract Exchange {
         return size * price * marginBps / BPS;
     }
 
-    function _readMarket(Record record, uint8 market) private view returns (uint256 word) {
-        word = record.read(0);
-        if (word == 0) revert UnknownMarket(market);
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // Packing
-    // ------------------------------------------------------------------------------------------
-
-    function _packAccount(uint256 balance, uint256 locked, uint256 markets)
-        private
-        pure
-        returns (uint256)
-    {
-        return uint256(balance.toUint128()) | (uint256(locked.toUint64()) << 128) | (markets << 192);
-    }
-
-    function _unpackAccount(uint256 word)
-        private
-        pure
-        returns (uint256 balance, uint256 locked, uint256 markets)
-    {
-        return (word & U128, (word >> 128) & U64, word >> 192);
-    }
-
-    function _packPosition(int256 size, int256 cost) private pure returns (uint256) {
-        return uint256(uint128(size.toInt128())) | (uint256(uint128(cost.toInt128())) << 128);
-    }
-
-    function _unpackPosition(uint256 word) private pure returns (int256 size, int256 cost) {
-        return (int128(uint128(word)), int128(uint128(word >> 128)));
-    }
-
-    function _packOrder(uint256 price, uint256 size, uint8 market, bool isAsk)
-        private
-        pure
-        returns (uint256)
-    {
-        return price | (size << 64) | (uint256(market) << 128) | (isAsk ? uint256(1) << 136 : 0);
-    }
-
-    function _unpackOrder(uint256 word)
-        private
-        pure
-        returns (uint256 price, uint256 size, uint8 market, bool isAsk)
-    {
-        return (word & U64, (word >> 64) & U64, uint8(word >> 128), (word >> 136) & 1 == 1);
-    }
-
-    function _withSize(uint256 order, uint256 size) private pure returns (uint256) {
-        return (order & ~(U64 << 64)) | (size << 64);
-    }
-
-    function _packMarket(
-        uint256 markPrice,
-        uint256 marginBps,
-        uint256 feeBps,
-        uint256 last,
-        uint256 volume
-    ) private pure returns (uint256) {
-        return uint256(markPrice.toUint64()) | (uint256(marginBps.toUint16()) << 64)
-            | (uint256(feeBps.toUint16()) << 80) | (uint256(last.toUint64()) << 96)
-            | (uint256(volume.toUint96()) << 160);
-    }
-
-    function _unpackMarket(uint256 word)
-        private
-        pure
-        returns (uint256 markPrice, uint256 marginBps, uint256 feeBps, uint256 last, uint256 volume)
-    {
-        return
-            (
-                word & U64,
-                (word >> 64) & 0xffff,
-                (word >> 80) & 0xffff,
-                (word >> 96) & U64,
-                word >> 160
-            );
+    /// The market's record, reverting if the market was never listed. Listing and {setMarkPrice}
+    /// keep a listed market's mark price nonzero.
+    function _listedMarket(Record r, uint8 market) private view returns (Market storage record) {
+        record = _asMarket(r);
+        if (record.markPrice == 0) revert UnknownMarket(market);
     }
 
     function _abs(int256 x) private pure returns (uint256) {

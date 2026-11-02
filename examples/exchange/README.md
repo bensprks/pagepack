@@ -27,13 +27,14 @@ every market's record on one shared page, and repack when activity shifts.
 
 **Records.** Accounts, positions, order slots and markets are all one-word records with a
 `bytes32` key (`accountKey`, `positionKey`, `orderKey`, `marketKey`). `Exchange` asks
-`_locate(key)` where a record lives and does everything else itself. `PackedExchange` answers
-with pagepack; the benchmark baseline answers with a mapping. Both share every line of logic.
+`_locate(key)` where a record lives, lays the record's struct over that slot and does everything
+else itself. `PackedExchange` answers with pagepack; the benchmark baseline answers with a
+mapping. Both share every line of logic.
 
 **Reusable order slots.** Each account has 16 order slots. Instead of a new storage entry per
 order, a new order overwrites a slot, and cancelled or filled slots keep a nonzero word. Writing
 over a nonzero word avoids MIP-8's 17,000 gas charge for growing state, so placing an order in a
-reused slot costs 19% less, with or without pagepack.
+reused slot costs 20% less, with or without pagepack.
 
 **Hints.** Any call can carry `(key, hint)` pairs. The packed exchange hands them to pagepack's
 `useHints`, which keeps them in transient storage for the transaction, so the caller can pass
@@ -73,15 +74,15 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 159,502 | 86,802 (-46%) | 78,429 (-51%) |
-| Re-quote 3 orders, one market | 108,884 | 86,534 (-21%) | 72,829 (-33%) |
-| Taker vs 3 makers | 205,684 | 135,562 (-34%) | 121,060 (-41%) |
-| Taker vs 14 makers | 703,015 | 374,236 (-47%) | 335,136 (-52%) |
+| Re-quote 1 order, maker in 6 markets | 157,682 | 84,947 (-46%) | 76,574 (-51%) |
+| Re-quote 3 orders, one market | 105,199 | 82,744 (-21%) | 69,039 (-34%) |
+| Taker vs 3 makers | 206,340 | 136,218 (-34%) | 121,716 (-41%) |
+| Taker vs 14 makers | 707,070 | 378,291 (-46%) | 339,191 (-52%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 87,193 |
-| New order in a reused slot | 70,193 (-19%) |
+| New order in a never-used slot | 85,866 |
+| New order in a reused slot | 68,866 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market record for every one of them.

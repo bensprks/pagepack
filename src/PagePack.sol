@@ -12,13 +12,26 @@ type Space is bytes32;
 
 /// The first data word of a record, wherever the record currently lives.
 ///
-/// A Record is a raw storage pointer, and nothing checks how it is used:
-/// - Offsets aren't bounds-checked. Offset `width` is already the next record's identity word.
-/// - It goes stale when the record moves. Look the record up again after anything in the same
-///   transaction that could rebalance, including an external call that might re-enter.
-/// - Records hold fixed-size values only. Mappings, dynamic arrays and long strings or bytes
-///   keep their contents at slots derived from the record's location, so a move would leave
-///   them behind. Keep such data in its own storage, keyed by the record's key.
+/// Use it a word at a time with {read} and {write}, or lay a struct over it and let Solidity
+/// handle the field offsets and packing:
+///
+///     Account storage account;
+///     assembly ("memory-safe") {
+///         account.slot := r
+///     }
+///
+/// A Record is a raw storage pointer, and so is a struct laid over one. Nothing checks how they
+/// are used:
+/// - Offsets aren't bounds-checked. Offset `width` is already the next record's identity word,
+///   so a struct must be exactly `width` words. Test each one: in a `T[2] storage` array placed
+///   at slot 0, element 1's slot is T's size in words. Declare that helper `view`, not `pure`:
+///   the compiler treats indexing a storage array as a possible read, though nothing is read.
+/// - They go stale when the record moves. Look the record up again, and lay the struct over it
+///   again, after anything in the same transaction that could rebalance, including an external
+///   call that might re-enter.
+/// - Records hold fixed-size values only. Mappings, dynamic arrays, strings and bytes keep their
+///   contents at slots derived from the record's location, so a move would leave them behind.
+///   Keep such data in its own storage, keyed by the record's key.
 type Record is uint256;
 
 using PagePack for Space global;

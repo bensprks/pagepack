@@ -65,6 +65,12 @@ abstract contract ExchangeTest is Test {
         exchange.listMarket(ETH, 2_000, 2_000, 10);
     }
 
+    function test_markPriceCannotBeZero() public {
+        vm.expectRevert(Exchange.InvalidPrice.selector);
+        vm.prank(admin);
+        exchange.setMarkPrice(ETH, 0);
+    }
+
     function test_depositAndWithdraw() public {
         (uint256 balance,,) = exchange.accountOf(maker);
         assertEq(balance, 1_000_000);
@@ -398,5 +404,80 @@ contract PackedExchangeTest is ExchangeTest {
         assertEq(markPrice, 2_000);
         assertEq(volume, 20);
         assertEq(locked, 30 * 2_000 / 10);
+    }
+}
+
+/// Exposes the width of the exchange's space.
+contract ExchangeRecords is PackedExchange {
+    constructor() PackedExchange(IERC20(address(0)), address(0), address(0), address(0)) {}
+
+    function width() external view returns (uint256) {
+        return RECORDS.width();
+    }
+}
+
+contract ExchangeRecordsTest is Test {
+    /// Each record struct must be exactly as wide as the exchange's space, or writing it would
+    /// run into the next packed record.
+    function test_recordStructsMatchTheSpaceWidth() public {
+        uint256 width = new ExchangeRecords().width();
+
+        assertEq(_accountWords(), width, "Account");
+        assertEq(_positionWords(), width, "Position");
+        assertEq(_orderWords(), width, "Order");
+        assertEq(_marketWords(), width, "Market");
+    }
+
+    // A struct's size in words is how far apart two of them sit in a storage array. These helpers
+    // are `view` only because the compiler treats indexing a storage array as a possible read and
+    // rejects `pure`. Indexing a fixed-size array just computes a slot, so they read and write no
+    // storage.
+
+    function _accountWords() internal view returns (uint256 words) {
+        Exchange.Account[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Account storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _positionWords() internal view returns (uint256 words) {
+        Exchange.Position[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Position storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _orderWords() internal view returns (uint256 words) {
+        Exchange.Order[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Order storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
+    }
+
+    function _marketWords() internal view returns (uint256 words) {
+        Exchange.Market[2] storage pair;
+        assembly ("memory-safe") {
+            pair.slot := 0
+        }
+
+        Exchange.Market storage second = pair[1];
+        assembly ("memory-safe") {
+            words := second.slot
+        }
     }
 }
