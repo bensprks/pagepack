@@ -81,19 +81,18 @@ and measured savings.
 From `make gas`. Each operation is a fresh transaction with cold storage. 8 markets and 16
 makers. Maker 0 holds positions in 6 markets with 8 resting orders, like Perpl's busiest
 account; the others quote one market. The taker is a long-tail account and is not packed.
-Compiled with Solar 0.3.0. With solc 0.8.38, each figure is 3% to 42% higher.
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 151,582 | 70,795 (-53%) | 65,753 (-57%) |
-| Re-quote 3 orders, one market | 99,783 | 67,272 (-33%) | 59,338 (-41%) |
-| Taker vs 3 makers | 187,191 | 105,312 (-44%) | 94,964 (-49%) |
-| Taker vs 14 makers | 623,582 | 241,234 (-61%) | 225,880 (-64%) |
+| Re-quote 1 order, maker in 6 markets | 158,495 | 79,762 (-50%) | 77,213 (-51%) |
+| Re-quote 3 orders, one market | 106,006 | 74,269 (-30%) | 67,091 (-37%) |
+| Taker vs 3 makers | 206,535 | 126,779 (-39%) | 118,316 (-43%) |
+| Taker vs 14 makers | 706,264 | 330,823 (-53%) | 320,490 (-55%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 83,587 |
-| New order in a reused slot | 66,587 (-20%) |
+| New order in a never-used slot | 86,442 |
+| New order in a reused slot | 69,442 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market entry for every one of them.
@@ -109,12 +108,12 @@ Compiled with Solar 0.3.0. With solc 0.8.38, each figure is 3% to 42% higher.
 
   | Map name | pagepack |
   | --- | ---: |
-  | pagepack.exchange | 241,234 |
-  | pagepack.exchange.1 | 241,869 |
-  | pagepack.exchange.2 | 244,720 |
-  | pagepack.exchange.3 | 240,627 |
-  | pagepack.exchange.4 | 246,261 |
-  | pagepack.exchange.5 | 240,491 |
+  | pagepack.exchange | 330,823 |
+  | pagepack.exchange.1 | 331,479 |
+  | pagepack.exchange.2 | 334,491 |
+  | pagepack.exchange.3 | 330,178 |
+  | pagepack.exchange.4 | 336,252 |
+  | pagepack.exchange.5 | 330,061 |
 
   Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or

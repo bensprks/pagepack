@@ -187,7 +187,7 @@ library PagePack {
     // 127, indices below 1024 and slots come from hashes, so none of it can overflow in practice.
 
     /// @notice Locates the entry for `key`, using a hint from {useHints} if there is one.
-    /// @dev Without a hint, every call searches the directory, which costs about 850 to 1,250
+    /// @dev Without a hint, every call searches the directory, which costs about 1,000 to 1,400
     ///      gas once its page is loaded. Look an entry up once per call and pass the Entry along
     ///      while nothing can rebalance.
     function find(PagedMap m, bytes32 key) internal view returns (Entry) {
@@ -325,7 +325,7 @@ library PagePack {
     ///      doesn't move, two packed entries would share a fingerprint, or the directory would
     ///      overflow.
     ///
-    ///      Packing an entry from home costs about 57,000 gas, mostly MIP-8's charge for two new
+    ///      Packing an entry from home costs about 54,000 gas, mostly MIP-8's charge for two new
     ///      slots, so split large layouts across transactions. The sort of newly packed entries
     ///      returns early if the caller lists them in fingerprint order ({fingerprintOf}).
     ///

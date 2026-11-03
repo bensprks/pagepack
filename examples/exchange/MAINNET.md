@@ -65,8 +65,8 @@ itself is touched.
 
 The [exchange example](README.md) models the account side of these transactions: accounts,
 positions, orders and markets, with a margin check across every market an account holds. On the
-same transaction shapes, the packed version costs 53% less than the same exchange on mappings for
-the multi-market re-quote (57% with hints), and 61% less for the 14-maker fill (64% with hints).
+same transaction shapes, the packed version costs 50% less than the same exchange on mappings for
+the multi-market re-quote (51% with hints), and 53% less for the 14-maker fill (55% with hints).
 
 These are the model's numbers. The model has no order-book index, price levels or funding, which
 a real exchange also touches.

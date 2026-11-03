@@ -3,9 +3,7 @@ src = "src"
 test = "test"
 out = "out"
 libs = ["lib"]
-# Solar, the compiler that ships with Foundry (Solar 0.3.0 in v1.9.0). Its code generation is
-# experimental. CI also runs the tests with solc 0.8.38, which most users compile pagepack with.
-solc = "solar"
+solc = "0.8.38"
 evm_version = "osaka"
 optimizer = true
 optimizer_runs = 200

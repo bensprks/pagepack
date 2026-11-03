@@ -1,7 +1,7 @@
 # pagepack
 
 A Solidity library for Monad that lets you move storage entries that are used together onto the
-same MIP-8 pages, to reduce gas costs by up to 83%.
+same MIP-8 pages, to reduce gas costs by up to 82%.
 
 **Storage on Monad.** Under [MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md),
 Monad groups each contract's storage into pages of 128 consecutive slots. The first slot a
@@ -28,7 +28,7 @@ It pays off when:
 
 - **Transactions touch entries under many different keys.** A mapping of structs already keeps
   one key's fields on one page. pagepack puts entries under different keys on the same page. A
-  transaction that touches one entry costs more than with a regular mapping: +3% with a hint, +30%
+  transaction that touches one entry costs more than with a regular mapping: +4% with a hint, +30%
   without.
 - **A small set of entries gets most of the traffic, and that set changes over time.** An
   offchain planner tracks which entries are used together, and the admin calls `rebalance` to
@@ -37,22 +37,21 @@ It pays off when:
 
 ## Results
 
-Updating existing one-slot balances in one transaction, from `make gas` on Monad's gas schedule,
-compiled with Solar 0.3.0. With solc 0.8.38, each figure is 1% to 12% higher:
+Updating existing one-slot balances in one transaction, from `make gas` on Monad's gas schedule:
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,210 | 43,034 (+30%) | 34,133 (+3%) |
-| 2 entries | 44,836 | 45,609 (+2%) | 35,474 (-21%) |
-| 10 entries | 137,940 | 64,589 (-53%) | 46,310 (-66%) |
-| 30 entries | 370,652 | 114,376 (-69%) | 73,322 (-80%) |
-| 64 entries, a full page | 766,320 | 197,135 (-74%) | 126,700 (-83%) |
-| 2 unpacked entries | 44,824 | 55,447 (+24%) | – |
+| 1 entry | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
+| 2 entries | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
+| 10 entries | 139,537 | 67,616 (-52%) | 49,609 (-64%) |
+| 30 entries | 375,029 | 123,085 (-67%) | 82,441 (-78%) |
+| 64 entries, a full page | 775,423 | 215,318 (-72%) | 138,313 (-82%) |
+| 2 unpacked entries | 45,309 | 56,398 (+24%) | – |
 
 A page holds 64 one-slot entries, not 128, because each packed entry is stored next to a one-slot
 identity word. Entries that aren't packed cost more than in a regular mapping, because the lookup
 still searches the directory. In a map created with `mapWithHomeHints`, a `HOME` hint reduces this
-to +3% (see the [full table](docs/reference.md#results)).
+to +6% (see the [full table](docs/reference.md#results)).
 
 ## Usage
 
@@ -134,7 +133,7 @@ An entry lives in one of two places:
   `floor(128 / (width + 1))` entries: 64 one-slot or 42 two-slot.
 
 A **directory** page lists the packed entries by fingerprint. `find(key)` checks the hint if
-there is one, otherwise searches the directory (about 850 to 1,250 gas once its page is
+there is one, otherwise searches the directory (about 1,000 to 1,400 gas once its page is
 loaded), and falls back to home if the key isn't listed. Hints are verified, so a wrong one costs
 gas but never returns the wrong entry.
 
@@ -143,8 +142,8 @@ them with the transaction, and the contract loads them once with `useHints`. Map
 `mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 
 **Rebalancing** takes a list of entries to move and their new positions, and applies all moves at
-once, so two entries can swap positions. Packing a one-slot entry costs about 57,000 gas. Swapping
-two packed entries costs about 56,000. pagepack has no access control: your contract decides who
+once, so two entries can swap positions. Packing a one-slot entry costs about 58,000 gas. Swapping
+two packed entries costs about 60,000. pagepack has no access control: your contract decides who
 rebalances. New entries always start on their home pages. Only `rebalance` packs them.
 
 The [reference](docs/reference.md) covers the storage layout, each step's cost, and planning
@@ -174,9 +173,8 @@ set in advance, leaving room for structs to grow.
 
 ## Development
 
-Requires [Foundry](https://getfoundry.sh) v1.9.0 or later, the version CI uses. `foundry.toml`
-compiles with Solar, which ships with Foundry, and sets `network = "monad"`, so tests and
-benchmarks run on Monad's gas schedule. CI also runs the tests with solc 0.8.38.
+Requires [Foundry](https://getfoundry.sh) v1.8.6 or later, the version CI uses. `foundry.toml`
+sets `network = "monad"`, so tests and benchmarks run on Monad's gas schedule.
 
 ```bash
 make test   # unit, fuzz and invariant tests
