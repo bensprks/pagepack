@@ -2,7 +2,7 @@
 
 Details behind the [README](../README.md): how a `PagedMap` stores and finds entries, what each
 step costs, and what a layout planner needs to know. Numbers are from `make gas`, on Monad's gas
-schedule.
+schedule, compiled with Solar 0.3.0. With solc 0.8.38, each is 1% to 42% higher.
 
 ## Results
 
@@ -10,18 +10,18 @@ Updating existing one-slot balances in one transaction:
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
-| 2 entries | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
-| 10 entries | 139,537 | 67,616 (-52%) | 49,609 (-64%) |
-| 30 entries | 375,029 | 123,085 (-67%) | 82,441 (-78%) |
-| 64 entries, a full page | 775,423 | 215,318 (-72%) | 138,313 (-82%) |
-| 30 entries, 3 pages | 375,029 | 141,802 (-62%) | 104,401 (-72%) |
-| 2 unpacked entries | 45,309 | 56,398 (+24%) | – |
-| 2 unpacked entries, home-hint map | 45,309 | 57,547 (+27%) | 47,871 (+6%) |
+| 1 entry | 33,210 | 43,034 (+30%) | 34,133 (+3%) |
+| 2 entries | 44,836 | 45,609 (+2%) | 35,474 (-21%) |
+| 10 entries | 137,940 | 64,589 (-53%) | 46,310 (-66%) |
+| 30 entries | 370,652 | 114,376 (-69%) | 73,322 (-80%) |
+| 64 entries, a full page | 766,320 | 197,135 (-74%) | 126,700 (-83%) |
+| 30 entries, 3 pages | 370,652 | 133,287 (-64%) | 95,282 (-74%) |
+| 2 unpacked entries | 44,824 | 55,447 (+24%) | – |
+| 2 unpacked entries, home-hint map | 44,824 | 56,528 (+26%) | 46,234 (+3%) |
 
 The saving grows with batch size. Without hints, single-entry writes and entries that were never
 packed cost more than a mapping, because finding an entry costs gas too. In a map that keeps home
-flags, a `HOME` hint brings an entry that was never packed within 6% of a mapping entry, at a
+flags, a `HOME` hint brings an entry that was never packed within 3% of a mapping entry, at a
 [storage cost](#home-hints-or-compact-storage).
 
 ## Storage layout
@@ -102,12 +102,12 @@ directories, with the page already loaded:
 
 | Directory and entry | Probes, mean | Probes, max | Gas, mean | Gas, max |
 | --- | ---: | ---: | ---: | ---: |
-| 64 packed, packed entry | 1.25 | 3 | 968 | 1,998 |
-| 64 packed, entry at home | 1.33 | 3 | 1,006 | 2,012 |
-| 512 packed, packed entry | 1.81 | 4 | 1,294 | 2,592 |
-| 512 packed, entry at home | 1.92 | 4 | 1,348 | 2,601 |
-| 1016 packed, packed entry | 1.94 | 4 | 1,362 | 2,592 |
-| 1016 packed, entry at home | 1.96 | 4 | 1,368 | 2,606 |
+| 64 packed, packed entry | 1.25 | 3 | 847 | 1,816 |
+| 64 packed, entry at home | 1.33 | 3 | 912 | 1,862 |
+| 512 packed, packed entry | 1.81 | 4 | 1,152 | 2,370 |
+| 512 packed, entry at home | 1.92 | 4 | 1,232 | 2,416 |
+| 1016 packed, packed entry | 1.94 | 4 | 1,214 | 2,370 |
+| 1016 packed, entry at home | 1.96 | 4 | 1,250 | 2,416 |
 
 Probes are the directory words read after the count. Fingerprints chosen to defeat the guess, as
 keys ground to be packed could be, make the search fall back to bisection after five probes,
@@ -134,33 +134,33 @@ which caps it at 12.
 Because every old slot is cleared before any new one is written, moves within a page also avoid
 MIP-8's state-growth charge.
 
-Packing an entry from home costs about 39,000 gas plus 18,000 to 20,000 for each nonzero slot it
+Packing an entry from home costs about 37,000 gas plus 18,000 to 20,000 for each nonzero slot it
 holds, mostly MIP-8's charge for new storage slots. Slots that are still zero cost nothing:
 
 | Packing from home, 16 entries per call | Gas per entry |
 | --- | ---: |
-| 1-slot entries | 58,472 |
-| 3-slot entries | 94,481 |
-| 8-slot entries | 185,948 |
-| 8-slot entries, 1 slot set | 62,636 |
-| 1-slot entries, never written | 38,056 |
-| 1-slot entries, never written, home-hint map | 58,396 |
+| 1-slot entries | 56,642 |
+| 3-slot entries | 91,598 |
+| 8-slot entries | 180,442 |
+| 8-slot entries, 1 slot set | 59,461 |
+| 1-slot entries, never written | 36,559 |
+| 1-slot entries, never written, home-hint map | 56,600 |
 
-Filling a map of 1,016 one-slot entries takes about 55M gas, so split large migrations into
+Filling a map of 1,016 one-slot entries takes about 53M gas, so split large migrations into
 transactions sized from the table above. Listing new entries in fingerprint order also skips a
-sort. After that, a rebalance costs what it changes. Swapping two entries costs about 60,000 gas
+sort. After that, a rebalance costs what it changes. Swapping two entries costs about 56,000 gas
 at any size. Packing or evicting rebuilds the directory once per call, which grows with the
 number of packed entries. Evicting also pays 17,000 gas for the entry's home slot in a default
 map:
 
 | Operation (one-slot entries, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
 | --- | ---: | ---: | ---: |
-| Empty rebalance | 22,883 | 22,883 | 22,883 |
-| Swap two entries | 59,458 | 60,047 | 61,206 |
-| Move one entry | 97,680 | 98,269 | 98,286 |
-| Evict one entry | 93,923 | 158,582 | 230,362 |
-| Replace one entry with another | 114,331 | 175,331 | 250,472 |
-| Resubmit the whole layout | 146,888 | 1,008,208 | 1,980,980 |
+| Empty rebalance | 22,500 | 22,500 | 22,500 |
+| Swap two entries | 55,149 | 55,703 | 56,784 |
+| Move one entry | 95,196 | 95,750 | 95,762 |
+| Evict one entry | 87,860 | 131,704 | 180,241 |
+| Replace one entry with another | 107,143 | 149,659 | 200,593 |
+| Resubmit the whole layout | 127,448 | 862,520 | 1,697,420 |
 
 ### Why entries don't pack themselves
 
@@ -205,7 +205,7 @@ pagepack applies layouts. Choosing them happens offchain. What a planner needs t
   packed, so a page holds `floor(128 / (width + 1))` of them: 64 one-slot entries, 42 two-slot or
   32 three-slot. Put fields that are used together in one entry, and rarely used fields in a
   map of their own.
-- **Cost.** Packing costs about 39,000 gas per entry plus 18,000 to 20,000 per nonzero slot, so
+- **Cost.** Packing costs about 37,000 gas per entry plus 18,000 to 20,000 per nonzero slot, so
   large migrations take several transactions. Packing or evicting rebuilds the directory once per
   call, which costs more as it fills. See [Rebalancing](#rebalancing) for the tables.
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
