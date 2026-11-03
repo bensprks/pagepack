@@ -173,12 +173,14 @@ set in advance, leaving room for structs to grow.
 
 ## Development
 
-Requires [Foundry](https://getfoundry.sh) v1.8.6 or later, the version CI uses. `foundry.toml`
-sets `network = "monad"`, so tests and benchmarks run on Monad's gas schedule.
+Requires [Foundry](https://getfoundry.sh) v1.9.0 or later, the version CI uses. `foundry.toml`
+compiles with solc and sets `network = "monad"`, so tests and benchmarks run on Monad's gas
+schedule. CI also runs the tests compiled with Solar 0.3.0, which ships with Foundry.
 
 ```bash
-make test   # unit, fuzz and invariant tests
-make gas    # benchmarks; CI fails if snapshots/ is out of date
+make test        # unit, fuzz and invariant tests
+make test-fast   # the same tests compiled with Solar, about 3x faster; CI still gates on solc
+make gas         # benchmarks; CI fails if snapshots/ is out of date
 make fmt
 ```
 
