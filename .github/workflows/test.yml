@@ -22,10 +22,10 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: v1.8.6
+          version: v1.9.0
 
-      - name: Show Forge version
-        run: forge --version
+      - name: Show Forge and Solar versions
+        run: forge --version && solar --version
 
       - name: Run Forge fmt
         run: forge fmt --check && forge fmt --check examples
@@ -37,6 +37,12 @@ jobs:
       # numbers can't go stale.
       - name: Run Forge tests
         run: forge test -vvv --gas-snapshot-check true
+
+      # Solar ships with Foundry and its code generation is experimental, so pagepack stays on
+      # solc. Running the tests on Solar too catches incompatibilities early. Its gas differs
+      # from solc's, so this run neither checks nor writes snapshots.
+      - name: Run Forge tests with Solar
+        run: forge test -vvv --use solar --gas-snapshot-emit false
 
       - name: Build a downstream consumer
         run: ./scripts/check-consumer.sh

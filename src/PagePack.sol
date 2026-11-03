@@ -325,7 +325,7 @@ library PagePack {
     ///      doesn't move, two packed entries would share a fingerprint, or the directory would
     ///      overflow.
     ///
-    ///      Packing an entry from home costs about 54,000 gas, mostly MIP-8's charge for two new
+    ///      Packing an entry from home costs about 58,000 gas, mostly MIP-8's charge for two new
     ///      slots, so split large layouts across transactions. The sort of newly packed entries
     ///      returns early if the caller lists them in fingerprint order ({fingerprintOf}).
     ///
