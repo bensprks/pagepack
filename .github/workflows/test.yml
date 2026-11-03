@@ -24,8 +24,8 @@ jobs:
         with:
           version: v1.9.0
 
-      - name: Show Forge version
-        run: forge --version
+      - name: Show Forge and Solar versions
+        run: forge --version && solar --version
 
       - name: Run Forge fmt
         run: forge fmt --check && forge fmt --check examples
@@ -37,6 +37,11 @@ jobs:
       # numbers can't go stale.
       - name: Run Forge tests
         run: forge test -vvv --gas-snapshot-check true
+
+      # Most users compile pagepack with solc, so the tests run on it too. Its gas differs from
+      # Solar's, so this run neither checks nor writes snapshots.
+      - name: Run Forge tests with solc
+        run: forge test -vvv --use 0.8.38 --gas-snapshot-emit false
 
       - name: Build a downstream consumer
         run: ./scripts/check-consumer.sh
