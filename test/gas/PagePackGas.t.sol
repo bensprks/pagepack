@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {PagePack} from "pagepack/PagePack.sol";
+import {PagePack, PagedMap} from "pagepack/PagePack.sol";
 import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 
 /// Measures updating N existing balances in one transaction. Each test is its own transaction,
@@ -19,6 +19,10 @@ contract PagePackGasTest is Test {
     MappingBalances internal mappingBalances;
     PackedBalances internal packedBalances;
     PackedBalances internal homeHintBalances;
+
+    // Fingerprints taken in each map, so filler never clashes with an entry packed before it.
+    mapping(uint256 fingerprint => bool) internal taken;
+    mapping(uint256 fingerprint => bool) internal takenWithHomeHints;
 
     function setUp() public {
         mappingBalances = new MappingBalances();
@@ -37,16 +41,26 @@ contract PagePackGasTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](94 + FILLER);
 
         for (uint256 i; i < ENTRIES_PER_PAGE; ++i) {
-            placements[i] = PagePack.Placement(_key(i), i);
+            placements[i] = PagePack.Placement(_key(i), 0, i);
         }
 
         for (uint256 i; i < 30; ++i) {
             uint256 page = 4 + i / 10;
-            placements[64 + i] = PagePack.Placement(_key(64 + i), page * ENTRIES_PER_PAGE + i % 10);
+            placements[64 + i] =
+                PagePack.Placement(_key(64 + i), 0, page * ENTRIES_PER_PAGE + i % 10);
         }
 
+        for (uint256 i; i < 94; ++i) {
+            _take(placements[i].key);
+        }
+
+        uint256 next;
         for (uint256 i; i < FILLER; ++i) {
-            placements[94 + i] = PagePack.Placement(_filler(i), 7 * ENTRIES_PER_PAGE + i);
+            while (!_take(_filler(next))) {
+                ++next;
+            }
+
+            placements[94 + i] = PagePack.Placement(_filler(next++), 0, 7 * ENTRIES_PER_PAGE + i);
         }
 
         packedBalances.pack(placements);
@@ -233,6 +247,17 @@ contract PagePackGasTest is Test {
 
     function _key(uint256 i) internal pure returns (bytes32) {
         return keccak256(abi.encode("bench", i));
+    }
+
+    /// Claims `key`'s fingerprint in both maps, unless either already has it.
+    function _take(bytes32 key) internal returns (bool) {
+        uint256 plain = PagePack.map("bench.balances", 1).fingerprintOf(key);
+        uint256 hinted = PagePack.mapWithHomeHints("bench.balances", 1).fingerprintOf(key);
+        if (taken[plain] || takenWithHomeHints[hinted]) return false;
+
+        taken[plain] = true;
+        takenWithHomeHints[hinted] = true;
+        return true;
     }
 
     function _filler(uint256 i) internal pure returns (bytes32) {

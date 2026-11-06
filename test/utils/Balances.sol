@@ -45,7 +45,7 @@ contract PackedBalances {
     }
 
     function pack(PagePack.Placement[] calldata placements) external {
-        BALANCES.rebalance(new bytes32[](0), placements);
+        BALANCES.rebalance(placements);
     }
 
     function bump(bytes32[] calldata keys) external {
