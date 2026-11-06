@@ -118,20 +118,19 @@ contract RebalanceHandler is Test {
         uint256[] memory placedAt,
         uint256 placements
     ) internal {
-        bytes32[] memory evictionKeys = new bytes32[](evictions);
-        PagePack.Placement[] memory request = new PagePack.Placement[](placements);
+        PagePack.Placement[] memory request = new PagePack.Placement[](evictions + placements);
 
         for (uint256 i; i < evictions; ++i) {
-            evictionKeys[i] = keys[evicted[i]];
+            request[i] = PagePack.Placement(keys[evicted[i]], 0, PagePack.HOME);
         }
 
         for (uint256 i; i < placements; ++i) {
-            request[i] = PagePack.Placement(keys[placedKeys[i]], placedAt[i]);
+            request[evictions + i] = PagePack.Placement(keys[placedKeys[i]], 0, placedAt[i]);
         }
 
         bool valid = _isValid(evicted, evictions, placedKeys, placedAt, placements);
 
-        try store.rebalance(evictionKeys, request) {
+        try store.rebalance(request) {
             if (!valid) ++mismatches;
             ++accepted;
 

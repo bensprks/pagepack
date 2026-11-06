@@ -33,7 +33,7 @@ abstract contract RebalanceScaleGasTest is Test {
         }
 
         _seed(store);
-        store.rebalance(_none(), _layout());
+        store.rebalance(_layout());
     }
 
     function test_gas_packAll() public {
@@ -42,21 +42,21 @@ abstract contract RebalanceScaleGasTest is Test {
         PagePack.Placement[] memory placements = _layout();
         vm.cool(address(fresh));
 
-        fresh.rebalance(_none(), placements);
+        fresh.rebalance(placements);
         vm.snapshotGasLastCall(group(), "Pack every entry");
 
         assertEq(fresh.packedCount(), size());
     }
 
     function test_gas_empty() public {
-        store.rebalance(_none(), new PagePack.Placement[](0));
+        store.rebalance(new PagePack.Placement[](0));
         vm.snapshotGasLastCall(group(), "Empty rebalance");
     }
 
     function test_gas_resubmit() public {
         PagePack.Placement[] memory placements = _layout();
 
-        store.rebalance(_none(), placements);
+        store.rebalance(placements);
         vm.snapshotGasLastCall(group(), "Resubmit the whole layout");
 
         assertEq(store.hintOf(keys[size() - 1]), size());
@@ -64,7 +64,7 @@ abstract contract RebalanceScaleGasTest is Test {
 
     function test_gas_moveOne() public {
         // Index `size` is free and on another page, so this pays state growth there.
-        store.rebalance(_none(), _placement(keys[0], size()));
+        store.rebalance(_placement(keys[0], size()));
         vm.snapshotGasLastCall(group(), "Move one entry");
 
         assertEq(store.hintOf(keys[0]), size() + 1);
@@ -73,10 +73,10 @@ abstract contract RebalanceScaleGasTest is Test {
 
     function test_gas_swap() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(keys[0], 1);
-        placements[1] = PagePack.Placement(keys[1], 0);
+        placements[0] = PagePack.Placement(keys[0], 0, 1);
+        placements[1] = PagePack.Placement(keys[1], 0, 0);
 
-        store.rebalance(_none(), placements);
+        store.rebalance(placements);
         vm.snapshotGasLastCall(group(), "Swap two entries");
 
         assertEq(store.hintOf(keys[0]), 2);
@@ -84,20 +84,18 @@ abstract contract RebalanceScaleGasTest is Test {
     }
 
     function test_gas_evict() public {
-        bytes32[] memory evictions = new bytes32[](1);
-        evictions[0] = keys[0];
-
-        store.rebalance(evictions, new PagePack.Placement[](0));
+        store.rebalance(_placement(keys[0], PagePack.HOME));
         vm.snapshotGasLastCall(group(), "Evict one entry");
 
         assertEq(store.packedCount(), size() - 1);
     }
 
     function test_gas_replace() public {
-        bytes32[] memory evictions = new bytes32[](1);
-        evictions[0] = keys[0];
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(keys[0], 0, PagePack.HOME);
+        placements[1] = PagePack.Placement(keys[size()], 0, 0);
 
-        store.rebalance(evictions, _placement(keys[size()], 0));
+        store.rebalance(placements);
         vm.snapshotGasLastCall(group(), "Replace one entry with another");
 
         assertEq(store.hintOf(keys[size()]), 1);
@@ -114,7 +112,7 @@ abstract contract RebalanceScaleGasTest is Test {
         placements = new PagePack.Placement[](size());
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], i);
+            placements[i] = PagePack.Placement(keys[i], 0, i);
         }
     }
 
@@ -124,10 +122,8 @@ abstract contract RebalanceScaleGasTest is Test {
         returns (PagePack.Placement[] memory placements)
     {
         placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, index);
+        placements[0] = PagePack.Placement(key, 0, index);
     }
-
-    function _none() internal pure returns (bytes32[] memory) {}
 }
 
 contract RebalanceScaleGas64Test is RebalanceScaleGasTest {

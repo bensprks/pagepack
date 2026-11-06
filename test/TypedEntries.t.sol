@@ -158,9 +158,9 @@ contract TypedEntriesTest is Test {
     /// Packs two entries side by side, at indices 0 and 1.
     function _pack(bytes32 first, bytes32 second) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(first, 0);
-        placements[1] = PagePack.Placement(second, 1);
+        placements[0] = PagePack.Placement(first, 0, 0);
+        placements[1] = PagePack.Placement(second, 0, 1);
 
-        VAULTS.rebalance(new bytes32[](0), placements);
+        VAULTS.rebalance(placements);
     }
 }

@@ -37,8 +37,8 @@ contract RebalanceGasTest is Test {
 
     function _place(uint256 index) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(KEY, index);
+        placements[0] = PagePack.Placement(KEY, 0, index);
 
-        store.rebalance(new bytes32[](0), placements);
+        store.rebalance(placements);
     }
 }

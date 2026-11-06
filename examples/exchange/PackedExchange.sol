@@ -32,11 +32,8 @@ contract PackedExchange is Exchange {
 
     /// @notice Applies a new layout. Hints issued before this call may go stale; they still
     ///         resolve correctly, just without the saving.
-    function rebalance(bytes32[] calldata evictions, PagePack.Placement[] calldata placements)
-        external
-        onlyAdmin
-    {
-        ENTRIES.map().rebalance(evictions, placements);
+    function rebalance(PagePack.Placement[] calldata placements) external onlyAdmin {
+        ENTRIES.map().rebalance(placements);
 
         emit Rebalanced(ENTRIES.map().packedCount());
     }

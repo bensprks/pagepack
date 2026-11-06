@@ -119,7 +119,7 @@ contract PagePackTest is Test {
         _pack(key, 9);
         assertEq(_flag(key), 1);
 
-        store.rebalance(_keys(key), _noPlacements());
+        store.rebalance(_eviction(key));
         assertEq(_flag(key), 0);
         assertEq(store.slotOf(key, PagePack.HOME), _home(key));
         _assertFilled(key, 10);
@@ -139,7 +139,7 @@ contract PagePackTest is Test {
         assertEq(store.slotOf(a, PagePack.HOME), store.slotOf(a));
         assertEq(store.slotOf(b, PagePack.HOME), _home(b));
 
-        store.rebalance(_keys(a), _noPlacements());
+        store.rebalance(_eviction(a));
         assertEq(_flag(a), 0);
         _assertFilled(a, 10);
     }
@@ -166,8 +166,8 @@ contract PagePackTest is Test {
             widest.set(key, i, i + 1);
         }
 
-        widest.rebalance(_noKeys(), _placement(key, 0));
-        widest.rebalance(_keys(key), _noPlacements());
+        widest.rebalance(_placement(key, 0));
+        widest.rebalance(_eviction(key));
 
         for (uint256 i; i < slots; ++i) {
             assertEq(widest.get(key, i, PagePack.HOME), i + 1);
@@ -268,7 +268,7 @@ contract PagePackTest is Test {
         _pack(key, 3);
         uint256 packedSlot = store.slotOf(key);
 
-        store.rebalance(_keys(key), _noPlacements());
+        store.rebalance(_eviction(key));
 
         assertEq(store.slotOf(key), _home(key));
         assertEq(store.packedCount(), 0);
@@ -299,11 +299,11 @@ contract PagePackTest is Test {
 
         for (uint256 i; i < 3; ++i) {
             _fill(_key(i), 10 * i);
-            placements[i] = PagePack.Placement(_key(i), i * 5);
+            placements[i] = PagePack.Placement(_key(i), 0, i * 5);
         }
 
-        store.rebalance(_noKeys(), placements);
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
+        store.rebalance(placements);
 
         assertEq(store.packedCount(), 3);
 
@@ -320,7 +320,7 @@ contract PagePackTest is Test {
         _fill(b, 20);
         _pack(a, 0);
 
-        store.rebalance(_keys(a), _placement(b, 0));
+        store.rebalance(_join(_eviction(a), _placement(b, 0)));
 
         assertEq(store.hintOf(a), 0);
         assertEq(store.hintOf(b), 1);
@@ -337,9 +337,9 @@ contract PagePackTest is Test {
         _pack(b, 1);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(a, 1);
-        placements[1] = PagePack.Placement(b, 0);
-        store.rebalance(_noKeys(), placements);
+        placements[0] = PagePack.Placement(a, 0, 1);
+        placements[1] = PagePack.Placement(b, 0, 0);
+        store.rebalance(placements);
 
         assertEq(store.hintOf(a), 2);
         assertEq(store.hintOf(b), 1);
@@ -360,9 +360,9 @@ contract PagePackTest is Test {
         _pack(b, 1);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(c, 1);
-        placements[1] = PagePack.Placement(b, 0);
-        store.rebalance(_keys(a), placements);
+        placements[0] = PagePack.Placement(c, 0, 1);
+        placements[1] = PagePack.Placement(b, 0, 0);
+        store.rebalance(_join(_eviction(a), placements));
 
         assertEq(store.hintOf(a), 0);
         assertEq(store.hintOf(b), 1);
@@ -382,9 +382,9 @@ contract PagePackTest is Test {
 
         // b is listed first but takes the index a only leaves later in the list.
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(b, 0);
-        placements[1] = PagePack.Placement(a, 5);
-        store.rebalance(_noKeys(), placements);
+        placements[0] = PagePack.Placement(b, 0, 0);
+        placements[1] = PagePack.Placement(a, 0, 5);
+        store.rebalance(placements);
 
         assertEq(store.hintOf(a), 6);
         assertEq(store.hintOf(b), 1);
@@ -396,7 +396,7 @@ contract PagePackTest is Test {
         _pack(_key(1), 0);
 
         vm.record();
-        store.rebalance(_noKeys(), _noPlacements());
+        store.rebalance(_noPlacements());
 
         (bytes32[] memory reads, bytes32[] memory writes) = vm.accesses(address(store));
         assertEq(reads.length, 0);
@@ -408,13 +408,13 @@ contract PagePackTest is Test {
 
         for (uint256 i; i < 3; ++i) {
             _fill(_key(i), 10 * i);
-            placements[i] = PagePack.Placement(_key(i), i * 5);
+            placements[i] = PagePack.Placement(_key(i), 0, i * 5);
         }
 
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
 
         vm.record();
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
 
         (, bytes32[] memory writes) = vm.accesses(address(store));
         assertEq(writes.length, 0);
@@ -426,7 +426,7 @@ contract PagePackTest is Test {
         _fill(b, 20);
         _pack(a, 0);
 
-        store.rebalance(_keys(a), _placement(b, 1));
+        store.rebalance(_join(_eviction(a), _placement(b, 1)));
 
         assertEq(store.hintOf(a), 0);
         assertEq(store.hintOf(b), 2);
@@ -438,7 +438,7 @@ contract PagePackTest is Test {
         _pack(_key(1), 0);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 0));
-        store.rebalance(_noKeys(), _placement(_key(2), 0));
+        store.rebalance(_placement(_key(2), 0));
     }
 
     function test_revertsWhenTargetHeldByUnnamedEntry() public {
@@ -448,56 +448,52 @@ contract PagePackTest is Test {
         _pack(b, 1);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 0));
-        store.rebalance(_noKeys(), _placement(b, 0));
+        store.rebalance(_placement(b, 0));
     }
 
     function test_revertsWhenTwoPlacementsShareIndex() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(_key(1), 3);
-        placements[1] = PagePack.Placement(_key(2), 3);
+        placements[0] = PagePack.Placement(_key(1), 0, 3);
+        placements[1] = PagePack.Placement(_key(2), 0, 3);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 3));
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
     }
 
     function test_revertsWhenIndexOutOfRange() public {
         uint256 index = PagePack.MAX_INDEX;
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexOutOfRange.selector, index));
-        store.rebalance(_noKeys(), _placement(_key(1), index));
+        store.rebalance(_placement(_key(1), index));
     }
 
     function test_revertsWhenEvictingUnpackedEntry() public {
         vm.expectRevert(abi.encodeWithSelector(PagePack.NotPacked.selector, _key(1)));
-        store.rebalance(_keys(_key(1)), _noPlacements());
+        store.rebalance(_eviction(_key(1)));
     }
 
     function test_revertsWhenSameKeyPlacedTwice() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(_key(1), 0);
-        placements[1] = PagePack.Placement(_key(1), 1);
+        placements[0] = PagePack.Placement(_key(1), 0, 0);
+        placements[1] = PagePack.Placement(_key(1), 0, 1);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, _key(1)));
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
     }
 
     function test_revertsWhenPackedKeyNamedTwice() public {
         bytes32 a = _key(1);
         _pack(a, 0);
 
-        bytes32[] memory twice = new bytes32[](2);
-        twice[0] = a;
-        twice[1] = a;
+        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
+        store.rebalance(_join(_eviction(a), _eviction(a)));
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
-        store.rebalance(twice, _noPlacements());
-
-        vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
-        store.rebalance(_keys(a), _placement(a, 5));
+        store.rebalance(_join(_eviction(a), _placement(a, 5)));
 
         // Also when one mention leaves the entry where it is.
         vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, a));
-        store.rebalance(_keys(a), _placement(a, 0));
+        store.rebalance(_join(_eviction(a), _placement(a, 0)));
     }
 
     /// The new entry sorts after the existing one when its index is higher, and before it when
@@ -507,10 +503,10 @@ contract PagePackTest is Test {
         _pack(a, 1);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
-        store.rebalance(_noKeys(), _placement(b, 2));
+        store.rebalance(_placement(b, 2));
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
-        store.rebalance(_noKeys(), _placement(b, 0));
+        store.rebalance(_placement(b, 0));
     }
 
     function test_invalidWidthReverts() public {
@@ -533,10 +529,10 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](perPage * 2);
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(_key(i), i);
+            placements[i] = PagePack.Placement(_key(i), 0, i);
         }
 
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
 
         for (uint256 i; i < placements.length; ++i) {
             uint256 first = store.slotOf(_key(i));
@@ -557,10 +553,10 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](26);
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(_key(i), i);
+            placements[i] = PagePack.Placement(_key(i), 0, i);
         }
 
-        wide.rebalance(_noKeys(), placements);
+        wide.rebalance(placements);
 
         uint256 lastOnFirstPage = wide.slotOf(_key(24));
         uint256 firstOnSecondPage = wide.slotOf(_key(25));
@@ -580,10 +576,10 @@ contract PagePackTest is Test {
             store.set(keys[i], 0, i + 1);
 
             // Reverse order exercises the sort.
-            placements[i] = PagePack.Placement(keys[i], keys.length - 1 - i);
+            placements[i] = PagePack.Placement(keys[i], 0, keys.length - 1 - i);
         }
 
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
 
         assertEq(store.packedCount(), keys.length);
 
@@ -605,21 +601,20 @@ contract PagePackTest is Test {
         }
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], i);
+            placements[i] = PagePack.Placement(keys[i], 0, i);
         }
 
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
 
-        bytes32[] memory evictions = new bytes32[](3);
-        PagePack.Placement[] memory replacements = new PagePack.Placement[](3);
+        PagePack.Placement[] memory replacements = new PagePack.Placement[](6);
 
         for (uint256 i; i < 3; ++i) {
             uint256 victim = 7 + i * 400;
-            evictions[i] = keys[victim];
-            replacements[i] = PagePack.Placement(keys[PagePack.MAX_PACKED + i], victim);
+            replacements[i] = PagePack.Placement(keys[victim], 0, PagePack.HOME);
+            replacements[3 + i] = PagePack.Placement(keys[PagePack.MAX_PACKED + i], 0, victim);
         }
 
-        store.rebalance(evictions, replacements);
+        store.rebalance(replacements);
 
         assertEq(store.packedCount(), PagePack.MAX_PACKED);
 
@@ -640,18 +635,18 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length + 1);
 
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], i);
+            placements[i] = PagePack.Placement(keys[i], 0, i);
         }
 
-        placements[keys.length] = PagePack.Placement(a, 250);
-        store.rebalance(_noKeys(), placements);
+        placements[keys.length] = PagePack.Placement(a, 0, 250);
+        store.rebalance(placements);
 
         // Above and below a's index.
         vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
-        store.rebalance(_noKeys(), _placement(b, 251));
+        store.rebalance(_placement(b, 251));
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.FingerprintCollision.selector, b));
-        store.rebalance(_noKeys(), _placement(b, 201));
+        store.rebalance(_placement(b, 201));
     }
 
     function test_revertsWhenDirectoryFull() public {
@@ -660,11 +655,274 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], i);
+            placements[i] = PagePack.Placement(keys[i], 0, i);
         }
 
         vm.expectRevert(PagePack.DirectoryFull.selector);
-        store.rebalance(_noKeys(), placements);
+        store.rebalance(placements);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Sizes
+    // ------------------------------------------------------------------------------------------
+
+    function test_pagesFitTheirEntriesAtEverySize() public pure {
+        for (uint256 slots = 1; slots <= PagePack.MAX_WIDTH; ++slots) {
+            PagedMap m = PagePack.map("x", slots);
+            uint256 perPage = m.entriesPerPage();
+
+            // As many entries as fit, each with a tag, and the rest of the page for data.
+            assertLe(perPage * (slots + 1), 128);
+            assertGt((perPage + 1) * (slots + 1), 128);
+            assertEq(m.dataSlotsPerPage(), 128 - perPage);
+        }
+    }
+
+    function test_viewsDifferOnlyInTheirSize() public {
+        store = new EntryStore(1, false);
+        uint256 handle = uint256(PagedMap.unwrap(store.MAP()));
+        uint256 twoSlots = uint256(PagedMap.unwrap(store.sized(2)));
+
+        // The low byte keeps the map's own size; the next one holds the size a handle looks up.
+        assertEq(handle & 0xffff, 0x0101);
+        assertEq(twoSlots & 0xffff, 0x0201);
+        assertEq(handle >> 16, twoSlots >> 16);
+        assertEq(PagedMap.unwrap(store.sized(1)), PagedMap.unwrap(store.MAP()));
+    }
+
+    function test_sizeIsPartOfAnEntrysIdentity() public {
+        store = new EntryStore(1, false);
+        bytes32 key = _key(1);
+
+        store.set(key, 0, 10);
+        store.setSized(key, 2, 0, 20);
+
+        // One key at two sizes is two entries.
+        assertEq(store.slotOf(key), _home(key));
+        assertEq(store.slotOfSized(key, 2), _homeSized(key, 2));
+        assertTrue(_home(key) != _homeSized(key, 2));
+        assertEq(store.fingerprintOfSized(key, 2), _identitySized(key, 2) >> 234);
+        assertEq(store.get(key, 0), 10);
+        assertEq(store.get(key, 2, 0, 0), 20);
+    }
+
+    function test_sizedRevertsForEntriesTooWideForAPage() public {
+        store = new EntryStore(1, false);
+        assertEq(store.dataSlotsPerPage(), 64);
+
+        store.sized(64);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 65));
+        store.sized(65);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 0));
+        store.sized(0);
+    }
+
+    function test_entriesOfSeveralSizesShareAPage() public {
+        store = new EntryStore(1, false);
+        (bytes32 a, bytes32 b, bytes32 c) = (_key(1), _key(2), _key(3));
+        _fillSized(a, 2, 10);
+        _fillSized(b, 1, 20);
+        _fillSized(c, 3, 30);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](3);
+        placements[0] = PagePack.Placement(a, 2, 0);
+        placements[1] = PagePack.Placement(b, 0, 1);
+        placements[2] = PagePack.Placement(c, 3, 2);
+        store.rebalance(placements);
+
+        // Data follows the page's 64 tags, in placement order, each entry as long as its size.
+        uint256 start = _directory() + 128;
+        assertEq(store.slotOfSized(a, 2), start + 64);
+        assertEq(store.slotOf(b), start + 66);
+        assertEq(store.slotOfSized(c, 3), start + 67);
+        assertEq(store.packedCount(), 3);
+
+        _assertFilledSized(a, 2, 10);
+        _assertFilledSized(b, 1, 20);
+        _assertFilledSized(c, 3, 30);
+    }
+
+    function test_hintsCarryTheirSize() public {
+        store = new EntryStore(1, false);
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _fillSized(a, 2, 10);
+        _fillSized(b, 1, 20);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(a, 2, 5);
+        placements[1] = PagePack.Placement(b, 0, 6);
+        store.rebalance(placements);
+
+        // An entry of the map's own size has the hint it would in a map of one size. Another
+        // size rides above the low 11 bits.
+        uint256 hint = store.hintOfSized(a, 2);
+        assertEq(store.hintOf(b), 7);
+        assertEq(hint, (2 << 11) | 6);
+        assertEq(store.hintOfSized(_key(3), 2), 0);
+
+        uint256 expected = store.slotOfSized(a, 2);
+        assertEq(store.slotOfSized(a, 2, hint), expected);
+
+        // To a view of another size, it is only a wrong hint.
+        assertEq(store.slotOfSized(a, 3, hint), _homeSized(a, 3));
+
+        // Hints for both sizes load from one list, and the lookup then reads only the tag.
+        PagePack.Hint[] memory hints = new PagePack.Hint[](2);
+        hints[0] = PagePack.Hint(a, hint);
+        hints[1] = PagePack.Hint(b, 7);
+
+        vm.record();
+        assertEq(store.slotOfSizedWithHints(hints, a, 2), expected);
+
+        (bytes32[] memory reads,) = vm.accesses(address(store));
+        assertEq(reads.length, 1);
+        assertEq(uint256(reads[0]), _directory() + 128 + 5);
+    }
+
+    function test_wrongSizePlacementPacksAnotherEntry() public {
+        store = new EntryStore(1, false);
+        bytes32 key = _key(1);
+        _fillSized(key, 2, 10);
+
+        // The entry has two slots, but the placement names one: that is another, empty entry.
+        store.rebalance(_place(key, 1, 0));
+
+        assertEq(store.hintOf(key), 1);
+        assertEq(store.get(key, 0), 0);
+
+        // The two-slot entry stays home, whole.
+        assertEq(store.hintOfSized(key, 2), 0);
+        assertEq(store.slotOfSized(key, 2), _homeSized(key, 2));
+        _assertFilledSized(key, 2, 10);
+    }
+
+    function test_movingWithinAPageMovesOnlyTags() public {
+        store = new EntryStore(1, false);
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _fillSized(a, 2, 10);
+        _fillSized(b, 1, 20);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(a, 2, 0);
+        placements[1] = PagePack.Placement(b, 0, 1);
+        store.rebalance(placements);
+
+        uint256 slotA = store.slotOfSized(a, 2);
+        uint256 slotB = store.slotOf(b);
+
+        // a takes b's index and b moves to a free one.
+        placements[0].index = 1;
+        placements[1].index = 2;
+
+        vm.record();
+        store.rebalance(placements);
+        (, bytes32[] memory writes) = vm.accesses(address(store));
+
+        // On the packed page, only tags are written.
+        uint256 start = _directory() + 128;
+
+        for (uint256 i; i < writes.length; ++i) {
+            if (uint256(writes[i]) >= start) assertLt(uint256(writes[i]), start + 64, "data");
+        }
+
+        assertEq(store.slotOfSized(a, 2), slotA);
+        assertEq(store.slotOf(b), slotB);
+        assertEq(store.hintOfSized(a, 2), (2 << 11) | 2);
+        assertEq(store.hintOf(b), 3);
+        _assertFilledSized(a, 2, 10);
+        _assertFilledSized(b, 1, 20);
+    }
+
+    /// Fills a page, frees two one-slot gaps and packs a two-slot entry: the staying entries
+    /// slide together to make room, keeping their indices.
+    function test_compactsAPageToFitAnEntry() public {
+        store = new EntryStore(1, false);
+        bytes32[5] memory keys = [_key(1), _key(2), _key(3), _key(4), _key(5)];
+        uint256[5] memory sizes = [uint256(1), 30, 1, 32, 2];
+
+        for (uint256 i; i < 5; ++i) {
+            _fillSized(keys[i], sizes[i], 100 * (i + 1));
+        }
+
+        // 1 + 30 + 1 + 32 slots fill the page's 64 data slots.
+        PagePack.Placement[] memory placements = new PagePack.Placement[](4);
+
+        for (uint256 i; i < 4; ++i) {
+            placements[i] = PagePack.Placement(keys[i], sizes[i], i);
+        }
+
+        store.rebalance(placements);
+
+        uint256 start = _directory() + 128;
+        assertEq(store.slotOfSized(keys[3], 32), start + 96);
+
+        placements = new PagePack.Placement[](3);
+        placements[0] = PagePack.Placement(keys[0], 1, PagePack.HOME);
+        placements[1] = PagePack.Placement(keys[2], 1, PagePack.HOME);
+        placements[2] = PagePack.Placement(keys[4], 2, 4);
+        store.rebalance(placements);
+
+        assertEq(store.slotOfSized(keys[1], 30), start + 64);
+        assertEq(store.slotOfSized(keys[3], 32), start + 94);
+        assertEq(store.slotOfSized(keys[4], 2), start + 126);
+
+        // Moving data doesn't move indices, so hints stay valid.
+        assertEq(store.hintOfSized(keys[1], 30), (30 << 11) | 2);
+        assertEq(store.hintOfSized(keys[3], 32), (32 << 11) | 4);
+        assertEq(store.packedCount(), 3);
+
+        for (uint256 i; i < 5; ++i) {
+            _assertFilledSized(keys[i], sizes[i], 100 * (i + 1));
+        }
+    }
+
+    function test_revertsWhenPageFull() public {
+        store = new EntryStore(1, false);
+
+        // A 64-slot entry fills the page's data region, leaving 63 indices without room.
+        store.rebalance(_place(_key(1), 64, 0));
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.PageFull.selector, 0));
+        store.rebalance(_place(_key(2), 0, 1));
+
+        // The next page has room.
+        store.rebalance(_place(_key(2), 0, 64));
+        assertEq(store.hintOf(_key(2)), 65);
+    }
+
+    function test_revertsWhenEntryTooWide() public {
+        store = new EntryStore(1, false);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 65));
+        store.rebalance(_place(_key(1), 65, 0));
+
+        // Evicting one fails the same way, since it could never have been packed.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 300));
+        store.rebalance(_place(_key(1), 300, PagePack.HOME));
+    }
+
+    /// An attacker owns entry x, packed next to a victim's entry v, and writes into x a word
+    /// shaped like a tag for another of their keys, y, pointing at v's data. Lookups read tags
+    /// only from the tag region, so no hint and no directory search ever reaches that word.
+    function test_dataShapedLikeATagNeverResolves() public {
+        store = new EntryStore(1, false);
+        (bytes32 x, bytes32 v, bytes32 y) = (_key(1), _key(2), _key(3));
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(x, 0, 0);
+        placements[1] = PagePack.Placement(v, 0, 1);
+        store.rebalance(placements);
+
+        uint256 victim = store.slotOf(v) - (_directory() + 128);
+        store.set(x, 0, (_identity(y) >> 14 << 14) | (victim << 7) | 1);
+
+        assertEq(store.slotOf(y), _home(y));
+
+        for (uint256 hint = 1; hint <= PagePack.HOME; ++hint) {
+            assertEq(store.slotOf(y, hint), _home(y));
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -690,37 +948,32 @@ contract PagePackTest is Test {
             if (_random(seed, i) % 3 == 0) continue;
 
             uint256 index = _freeIndex(taken, _random(seed, i + 1000));
-            first[firstCount++] = PagePack.Placement(_key(i), index);
+            first[firstCount++] = PagePack.Placement(_key(i), 0, index);
             indexOf[i] = index + 1;
         }
 
         _truncate(first, firstCount);
-        store.rebalance(_noKeys(), first);
+        store.rebalance(first);
 
         // Round two: evict some packed entries, move some, and pack some new ones.
-        bytes32[] memory evictions = new bytes32[](n);
         PagePack.Placement[] memory second = new PagePack.Placement[](n);
-        uint256 evictionCount;
         uint256 secondCount;
 
         for (uint256 i; i < n; ++i) {
             uint256 roll = _random(seed, i + 2000) % 4;
 
             if (indexOf[i] != 0 && roll == 0) {
-                evictions[evictionCount++] = _key(i);
+                second[secondCount++] = PagePack.Placement(_key(i), 0, PagePack.HOME);
                 indexOf[i] = 0;
             } else if (roll == 1) {
                 uint256 index = _freeIndex(taken, _random(seed, i + 3000));
-                second[secondCount++] = PagePack.Placement(_key(i), index);
+                second[secondCount++] = PagePack.Placement(_key(i), 0, index);
                 indexOf[i] = index + 1;
             }
         }
 
-        assembly ("memory-safe") {
-            mstore(evictions, evictionCount)
-        }
         _truncate(second, secondCount);
-        store.rebalance(evictions, second);
+        store.rebalance(second);
 
         uint256 packed;
 
@@ -751,8 +1004,10 @@ contract PagePackTest is Test {
         return _identity(key) & ~uint256(127);
     }
 
+    /// Every size in a map shares the directory, so its address leaves out the size byte.
     function _directory() internal view returns (uint256) {
-        return uint256(keccak256(abi.encode(store.MAP()))) & ~uint256(127);
+        uint256 handle = uint256(PagedMap.unwrap(store.MAP())) & ~uint256(0xff00);
+        return uint256(keccak256(abi.encode(handle))) & ~uint256(127);
     }
 
     /// The slot holding packed `index`'s tag: packed pages follow the directory, and each starts
@@ -781,6 +1036,38 @@ contract PagePackTest is Test {
         return uint256(vm.load(address(store), bytes32(_home(key) + 127)));
     }
 
+    /// The identity of `key` looked up at `slots`, through a view.
+    function _identitySized(bytes32 key, uint256 slots) internal view returns (uint256) {
+        uint256 handle = uint256(PagedMap.unwrap(store.MAP())) & ~uint256(0xff00);
+        return uint256(keccak256(abi.encode(handle | (slots << 8), key)));
+    }
+
+    function _homeSized(bytes32 key, uint256 slots) internal view returns (uint256) {
+        return _identitySized(key, slots) & ~uint256(127);
+    }
+
+    /// Writes value, value + 1, ... into each of the entry's slots.
+    function _fillSized(bytes32 key, uint256 slots, uint256 value) internal {
+        for (uint256 i; i < slots; ++i) {
+            store.setSized(key, slots, i, value + i);
+        }
+    }
+
+    function _assertFilledSized(bytes32 key, uint256 slots, uint256 value) internal view {
+        for (uint256 i; i < slots; ++i) {
+            assertEq(store.get(key, slots, i, 0), value + i);
+        }
+    }
+
+    function _place(bytes32 key, uint256 slots, uint256 index)
+        internal
+        pure
+        returns (PagePack.Placement[] memory placements)
+    {
+        placements = new PagePack.Placement[](1);
+        placements[0] = PagePack.Placement(key, slots, index);
+    }
+
     function _fingerprint(bytes32 key) internal view returns (uint256) {
         return _identity(key) >> 234;
     }
@@ -805,7 +1092,7 @@ contract PagePackTest is Test {
     }
 
     function _pack(bytes32 key, uint256 index) internal {
-        store.rebalance(_noKeys(), _placement(key, index));
+        store.rebalance(_placement(key, index));
     }
 
     function _placement(bytes32 key, uint256 index)
@@ -814,15 +1101,29 @@ contract PagePackTest is Test {
         returns (PagePack.Placement[] memory placements)
     {
         placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, index);
+        placements[0] = PagePack.Placement(key, 0, index);
     }
 
-    function _keys(bytes32 key) internal pure returns (bytes32[] memory keys) {
-        keys = new bytes32[](1);
-        keys[0] = key;
+    function _eviction(bytes32 key) internal pure returns (PagePack.Placement[] memory placements) {
+        placements = new PagePack.Placement[](1);
+        placements[0] = PagePack.Placement(key, 0, PagePack.HOME);
     }
 
-    function _noKeys() internal pure returns (bytes32[] memory) {}
+    function _join(PagePack.Placement[] memory a, PagePack.Placement[] memory b)
+        internal
+        pure
+        returns (PagePack.Placement[] memory joined)
+    {
+        joined = new PagePack.Placement[](a.length + b.length);
+
+        for (uint256 i; i < a.length; ++i) {
+            joined[i] = a[i];
+        }
+
+        for (uint256 i; i < b.length; ++i) {
+            joined[a.length + i] = b[i];
+        }
+    }
 
     function _noPlacements() internal pure returns (PagePack.Placement[] memory) {}
 
