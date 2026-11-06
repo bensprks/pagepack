@@ -13,7 +13,7 @@ contract RebalanceGasTest is Test {
 
     function setUp() public {
         // Three data slots and a tag each: 32 entries per page.
-        store = new EntryStore(3, false);
+        store = new EntryStore(3, 0, false);
 
         for (uint256 i; i < 3; ++i) {
             store.set(KEY, i, 100 + i);

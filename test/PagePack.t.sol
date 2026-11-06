@@ -17,13 +17,20 @@ contract HintedCaller {
     }
 }
 
+/// Creates maps in an external call, so a test can expect the revert.
+contract MapFactory {
+    function map(uint256 slots, uint256 perPage) external pure returns (PagedMap) {
+        return PagePack.map("pagepack.factory", slots, perPage);
+    }
+}
+
 contract PagePackTest is Test {
     EntryStore internal store;
 
     mapping(uint256 fingerprint => uint256 keyPlusOne) internal seen;
 
     function setUp() public {
-        store = new EntryStore(3, false);
+        store = new EntryStore(3, 0, false);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -79,7 +86,7 @@ contract PagePackTest is Test {
     }
 
     function test_homeHintSkipsDirectory() public {
-        store = new EntryStore(3, true);
+        store = new EntryStore(3, 0, true);
         bytes32 key = _key(1);
         _fill(key, 10);
         _pack(_key(2), 0);
@@ -97,7 +104,7 @@ contract PagePackTest is Test {
     }
 
     function test_homeHintForPackedEntryFallsBackToDirectory() public {
-        store = new EntryStore(3, true);
+        store = new EntryStore(3, 0, true);
         bytes32 key = _key(1);
         _fill(key, 10);
         _pack(key, 4);
@@ -107,7 +114,7 @@ contract PagePackTest is Test {
     }
 
     function test_packedFlagFollowsEntry() public {
-        store = new EntryStore(3, true);
+        store = new EntryStore(3, 0, true);
         bytes32 key = _key(1);
         _fill(key, 10);
         assertEq(_flag(key), 0);
@@ -145,8 +152,8 @@ contract PagePackTest is Test {
     }
 
     function test_homeHintMapsHaveTheirOwnStorage() public {
-        EntryStore plain = new EntryStore(3, false);
-        EntryStore hinted = new EntryStore(3, true);
+        EntryStore plain = new EntryStore(3, 0, false);
+        EntryStore hinted = new EntryStore(3, 0, true);
         uint256 plainMap = uint256(PagedMap.unwrap(plain.MAP()));
         uint256 hintedMap = uint256(PagedMap.unwrap(hinted.MAP()));
 
@@ -159,7 +166,7 @@ contract PagePackTest is Test {
 
     function test_widestEntriesLeaveRoomForFlag() public {
         uint256 slots = PagePack.MAX_WIDTH;
-        EntryStore widest = new EntryStore(slots, true);
+        EntryStore widest = new EntryStore(slots, 0, true);
         bytes32 key = _key(1);
 
         for (uint256 i; i < slots; ++i) {
@@ -511,10 +518,10 @@ contract PagePackTest is Test {
 
     function test_invalidWidthReverts() public {
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 0));
-        new EntryStore(0, false);
+        new EntryStore(0, 0, false);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 128));
-        new EntryStore(128, false);
+        new EntryStore(128, 0, false);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -547,7 +554,7 @@ contract PagePackTest is Test {
 
     function test_wideEntriesLeaveUnusedTail() public {
         // Width 4 and a tag each: 25 entries per page with 3 slots left over.
-        EntryStore wide = new EntryStore(4, false);
+        EntryStore wide = new EntryStore(4, 0, false);
         assertEq(wide.entriesPerPage(), 25);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](26);
@@ -568,7 +575,7 @@ contract PagePackTest is Test {
     }
 
     function test_fullDirectory() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
@@ -592,7 +599,7 @@ contract PagePackTest is Test {
     /// Evicts and packs entries scattered through a full directory, so the rebuild has to splice
     /// entries into the middle of words as well as copy whole ones.
     function test_rebuildsFullDirectory() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 3);
         PagePack.Placement[] memory placements = new PagePack.Placement[](PagePack.MAX_PACKED);
 
@@ -629,7 +636,7 @@ contract PagePackTest is Test {
     }
 
     function test_revertsWhenCollisionDeepInDirectory() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         (bytes32 a, bytes32 b) = _collidingKeys();
         bytes32[] memory keys = _uniqueKeys(200);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length + 1);
@@ -650,7 +657,7 @@ contract PagePackTest is Test {
     }
 
     function test_revertsWhenDirectoryFull() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         bytes32[] memory keys = _uniqueKeys(PagePack.MAX_PACKED + 1);
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
@@ -679,7 +686,7 @@ contract PagePackTest is Test {
     }
 
     function test_viewsDifferOnlyInTheirSize() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         uint256 handle = uint256(PagedMap.unwrap(store.MAP()));
         uint256 twoSlots = uint256(PagedMap.unwrap(store.sized(2)));
 
@@ -691,7 +698,7 @@ contract PagePackTest is Test {
     }
 
     function test_sizeIsPartOfAnEntrysIdentity() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         bytes32 key = _key(1);
 
         store.set(key, 0, 10);
@@ -707,7 +714,7 @@ contract PagePackTest is Test {
     }
 
     function test_sizedRevertsForEntriesTooWideForAPage() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         assertEq(store.dataSlotsPerPage(), 64);
 
         store.sized(64);
@@ -720,7 +727,7 @@ contract PagePackTest is Test {
     }
 
     function test_entriesOfSeveralSizesShareAPage() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         (bytes32 a, bytes32 b, bytes32 c) = (_key(1), _key(2), _key(3));
         _fillSized(a, 2, 10);
         _fillSized(b, 1, 20);
@@ -745,7 +752,7 @@ contract PagePackTest is Test {
     }
 
     function test_hintsCarryTheirSize() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         (bytes32 a, bytes32 b) = (_key(1), _key(2));
         _fillSized(a, 2, 10);
         _fillSized(b, 1, 20);
@@ -782,7 +789,7 @@ contract PagePackTest is Test {
     }
 
     function test_wrongSizePlacementPacksAnotherEntry() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         bytes32 key = _key(1);
         _fillSized(key, 2, 10);
 
@@ -799,7 +806,7 @@ contract PagePackTest is Test {
     }
 
     function test_movingWithinAPageMovesOnlyTags() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         (bytes32 a, bytes32 b) = (_key(1), _key(2));
         _fillSized(a, 2, 10);
         _fillSized(b, 1, 20);
@@ -838,7 +845,7 @@ contract PagePackTest is Test {
     /// Fills a page, frees two one-slot gaps and packs a two-slot entry: the staying entries
     /// slide together to make room, keeping their indices.
     function test_compactsAPageToFitAnEntry() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         bytes32[5] memory keys = [_key(1), _key(2), _key(3), _key(4), _key(5)];
         uint256[5] memory sizes = [uint256(1), 30, 1, 32, 2];
 
@@ -879,7 +886,7 @@ contract PagePackTest is Test {
     }
 
     function test_revertsWhenPageFull() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
 
         // A 64-slot entry fills the page's data region, leaving 63 indices without room.
         store.rebalance(_place(_key(1), 64, 0));
@@ -893,7 +900,7 @@ contract PagePackTest is Test {
     }
 
     function test_revertsWhenEntryTooWide() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 65));
         store.rebalance(_place(_key(1), 65, 0));
@@ -907,7 +914,7 @@ contract PagePackTest is Test {
     /// shaped like a tag for another of their keys, y, pointing at v's data. Lookups read tags
     /// only from the tag region, so no hint and no directory search ever reaches that word.
     function test_dataShapedLikeATagNeverResolves() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
         (bytes32 x, bytes32 v, bytes32 y) = (_key(1), _key(2), _key(3));
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
@@ -922,6 +929,76 @@ contract PagePackTest is Test {
 
         for (uint256 hint = 1; hint <= PagePack.HOME; ++hint) {
             assertEq(store.slotOf(y, hint), _home(y));
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Entries per page
+    // ------------------------------------------------------------------------------------------
+
+    function test_mapsCanSetEntriesPerPage() public pure {
+        PagedMap m = PagePack.map("x", 1, 50);
+
+        assertEq(m.entriesPerPage(), 50);
+        assertEq(m.dataSlotsPerPage(), 78);
+        assertEq(m.width(), 1);
+        assertEq((uint256(PagedMap.unwrap(m)) >> 16) & 0xff, 50);
+
+        // The default is as many entries of the map's size as fit, so naming it changes nothing.
+        assertEq(PagedMap.unwrap(PagePack.map("x", 1, 64)), PagedMap.unwrap(PagePack.map("x", 1)));
+        assertEq(
+            PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3, 32)),
+            PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3))
+        );
+    }
+
+    function test_invalidEntriesPerPageReverts() public {
+        MapFactory factory = new MapFactory();
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidEntriesPerPage.selector, 0));
+        factory.map(1, 0);
+
+        // Every entry needs a data slot as well as a tag.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidEntriesPerPage.selector, 65));
+        factory.map(1, 65);
+
+        // An entry of the map's own size must fit the data region.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidEntriesPerPage.selector, 29));
+        factory.map(100, 29);
+
+        factory.map(100, 28);
+        factory.map(1, 64);
+    }
+
+    /// Two-slot accounts and one-slot approvals, one each: 64 tags leave room for 21 pairs on a
+    /// page, and 50 tags for 25.
+    function test_fewerTagsFitMoreMixedEntries() public {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](50);
+
+        for (uint256 i; i < 25; ++i) {
+            placements[2 * i] = PagePack.Placement(_key(2 * i), 2, 2 * i);
+            placements[2 * i + 1] = PagePack.Placement(_key(2 * i + 1), 1, 2 * i + 1);
+        }
+
+        store = new EntryStore(1, 0, false);
+        vm.expectRevert(abi.encodeWithSelector(PagePack.PageFull.selector, 0));
+        store.rebalance(placements);
+
+        store = new EntryStore(1, 50, false);
+
+        for (uint256 i; i < 50; ++i) {
+            _fillSized(_key(i), 2 - i % 2, 10 * i);
+        }
+
+        store.rebalance(placements);
+
+        uint256 page = (_directory() + 128) >> 7;
+
+        for (uint256 i; i < 50; ++i) {
+            uint256 slots = 2 - i % 2;
+
+            assertEq(store.slotOfSized(_key(i), slots) >> 7, page, "another page");
+            _assertFilledSized(_key(i), slots, 10 * i);
         }
     }
 

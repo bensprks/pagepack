@@ -19,7 +19,7 @@ abstract contract RebalanceScaleGasTest is Test {
     function group() internal pure virtual returns (string memory);
 
     function setUp() public {
-        store = new EntryStore(1, false);
+        store = new EntryStore(1, 0, false);
 
         // One spare key to swap in. Keys must have distinct fingerprints to be packed together.
         for (uint256 i; keys.length < size() + 1; ++i) {
@@ -37,7 +37,7 @@ abstract contract RebalanceScaleGasTest is Test {
     }
 
     function test_gas_packAll() public {
-        EntryStore fresh = new EntryStore(1, false);
+        EntryStore fresh = new EntryStore(1, 0, false);
         _seed(fresh);
         PagePack.Placement[] memory placements = _layout();
         vm.cool(address(fresh));

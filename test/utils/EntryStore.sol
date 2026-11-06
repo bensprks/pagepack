@@ -7,10 +7,17 @@ import {PagePack, PagedMap} from "pagepack/PagePack.sol";
 contract EntryStore {
     PagedMap public immutable MAP;
 
-    constructor(uint256 slots, bool homeHints) {
-        MAP = homeHints
-            ? PagePack.mapWithHomeHints("pagepack.test", slots)
-            : PagePack.map("pagepack.test", slots);
+    /// @param perPage Entries per page, or 0 for the default.
+    constructor(uint256 slots, uint256 perPage, bool homeHints) {
+        if (perPage == 0) {
+            MAP = homeHints
+                ? PagePack.mapWithHomeHints("pagepack.test", slots)
+                : PagePack.map("pagepack.test", slots);
+        } else {
+            MAP = homeHints
+                ? PagePack.mapWithHomeHints("pagepack.test", slots, perPage)
+                : PagePack.map("pagepack.test", slots, perPage);
+        }
     }
 
     function get(bytes32 key, uint256 offset) external view returns (uint256) {

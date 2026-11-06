@@ -11,7 +11,7 @@ import {LibDirectory} from "./LibDirectory.sol";
 ///
 /// The low byte holds the map's own entry size in slots (7 bits) and, in its top bit, whether
 /// the map keeps home flags for HOME hints. The next byte holds the size of the entries this
-/// handle looks up: the map's own size, or a view's.
+/// handle looks up: the map's own size, or a view's. The third holds the map's entries per page.
 type PagedMap is bytes32;
 
 /// The first data slot of an entry, wherever the entry currently lives.
@@ -110,6 +110,7 @@ library PagePack {
     }
 
     error InvalidWidth(uint256 width);
+    error InvalidEntriesPerPage(uint256 perPage);
     error StructTooWide(uint256 slots, uint256 width);
     error EntryTooWide(uint256 slots);
     error IndexOutOfRange(uint256 index);
@@ -135,11 +136,16 @@ library PagePack {
     uint256 internal constant HOME = MAX_INDEX + 1;
 
     // The low byte of a map: its own size, and a bit for maps that keep home flags. The byte
-    // above holds the size of the entries a handle looks up.
+    // above holds the size of the entries a handle looks up, and the one above that the map's
+    // entries per page.
     uint256 private constant MAP_SLOTS_MASK = 0x7f;
     uint256 private constant HOME_HINTS = 0x80;
     uint256 private constant SLOTS_SHIFT = 8;
     uint256 private constant SLOTS_BYTE = 0xff00;
+    uint256 private constant PER_PAGE_SHIFT = 16;
+
+    // Every entry on a page needs a data slot as well as a tag.
+    uint256 private constant MAX_PER_PAGE = PAGE_SIZE / 2;
 
     // A hint's low 11 bits are index + 1 or HOME. A hint from a view of another size holds that
     // size above them. Plain literals, so that inline assembly can use them.
@@ -169,7 +175,23 @@ library PagePack {
     ///      A map holding entries of several sizes takes the smallest; each larger size is looked
     ///      up through {sized}.
     function map(string memory name, uint256 slots) internal pure returns (PagedMap) {
-        return _map(name, slots, 0);
+        return _map(name, slots, _fullPage(slots), 0);
+    }
+
+    /// @notice Like {map}, with `perPage` packed indices on each page instead of as many
+    ///         entries of `slots` slots as fit. For a map of several sizes: each page holds
+    ///         `perPage` tags, and its entries' sizes can add up to `128 - perPage` slots.
+    /// @dev Pick it for the mix the planner packs. Two-slot accounts with one-slot approvals,
+    ///      one each, fit 50 to a page with 50 tags (25 of each, 75 data slots), where
+    ///      {map}(name, 1) keeps 64 tags and fits 42. Must be 1 to 64 and leave room for an
+    ///      entry of `slots`. Part of the map, like its width: a map made with another value
+    ///      never shares storage with this one.
+    function map(string memory name, uint256 slots, uint256 perPage)
+        internal
+        pure
+        returns (PagedMap)
+    {
+        return _map(name, slots, perPage, 0);
     }
 
     /// @notice Like {map}, but packed entries leave a flag on their home page, so a HOME hint
@@ -179,14 +201,38 @@ library PagePack {
     ///      aren't packed and nothing else loads the directory. The choice is part of the map,
     ///      like its width: the two kinds of map never share storage.
     function mapWithHomeHints(string memory name, uint256 slots) internal pure returns (PagedMap) {
-        return _map(name, slots, HOME_HINTS);
+        return _map(name, slots, _fullPage(slots), HOME_HINTS);
     }
 
-    function _map(string memory name, uint256 slots, uint256 mode) private pure returns (PagedMap) {
-        if (slots == 0 || slots > MAX_WIDTH) revert InvalidWidth(slots);
+    /// @notice Like {mapWithHomeHints}, with `perPage` packed indices on each page. See
+    ///         {map}(name, slots, perPage).
+    function mapWithHomeHints(string memory name, uint256 slots, uint256 perPage)
+        internal
+        pure
+        returns (PagedMap)
+    {
+        return _map(name, slots, perPage, HOME_HINTS);
+    }
 
-        uint256 base = uint256(keccak256(bytes(name))) & ~uint256(0xffff);
-        return PagedMap.wrap(bytes32(base | (slots << SLOTS_SHIFT) | slots | mode));
+    function _map(string memory name, uint256 slots, uint256 perPage, uint256 mode)
+        private
+        pure
+        returns (PagedMap)
+    {
+        if (slots == 0 || slots > MAX_WIDTH) revert InvalidWidth(slots);
+        if (perPage == 0 || perPage > MAX_PER_PAGE || slots > PAGE_SIZE - perPage) {
+            revert InvalidEntriesPerPage(perPage);
+        }
+
+        uint256 base = uint256(keccak256(bytes(name))) & ~uint256(0xffffff);
+        return PagedMap.wrap(
+            bytes32(base | (perPage << PER_PAGE_SHIFT) | (slots << SLOTS_SHIFT) | slots | mode)
+        );
+    }
+
+    /// As many entries of `slots` slots as fit on a page, each with its tag.
+    function _fullPage(uint256 slots) private pure returns (uint256) {
+        return slots == 0 ? 0 : PAGE_SIZE / (slots + 1);
     }
 
     /// @notice A view of the map for entries of `slots` slots, for a map holding entries of
@@ -222,11 +268,11 @@ library PagePack {
         return uint256(PagedMap.unwrap(m)) & HOME_HINTS != 0;
     }
 
-    /// @notice Number of packed indices on one page: as many entries of the map's own size as
-    ///         fit on a page, each with its tag.
+    /// @notice Number of packed indices on one page: by default, as many entries of the map's
+    ///         own size as fit on a page, each with its tag.
     function entriesPerPage(PagedMap m) internal pure returns (uint256 perPage) {
         assembly ("memory-safe") {
-            perPage := div(PAGE_SIZE, add(and(m, MAP_SLOTS_MASK), 1))
+            perPage := and(shr(PER_PAGE_SHIFT, m), 0xff)
         }
     }
 
@@ -275,7 +321,7 @@ library PagePack {
 
             mstore(0x00, and(m, not(SLOTS_BYTE)))
             dir := and(keccak256(0x00, 0x20), not(127))
-            perPage := div(PAGE_SIZE, add(and(m, MAP_SLOTS_MASK), 1))
+            perPage := and(shr(PER_PAGE_SHIFT, m), 0xff)
 
             let hint := tload(id)
 
@@ -341,7 +387,7 @@ library PagePack {
 
                 mstore(0x00, and(m, not(SLOTS_BYTE)))
                 let dir := and(keccak256(0x00, 0x20), not(127))
-                let perPage := div(PAGE_SIZE, add(and(m, MAP_SLOTS_MASK), 1))
+                let perPage := and(shr(PER_PAGE_SHIFT, m), 0xff)
                 let page := add(dir, shl(7, add(div(index, perPage), 1)))
                 let tag := sload(add(page, mod(index, perPage)))
 

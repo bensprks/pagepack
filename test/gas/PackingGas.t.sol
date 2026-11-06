@@ -64,7 +64,7 @@ contract PackingGasTest is Test {
         internal
         returns (EntryStore store)
     {
-        store = new EntryStore(slots, homeHints);
+        store = new EntryStore(slots, 0, homeHints);
 
         for (uint256 i; i < EXISTING + NEW; ++i) {
             for (uint256 w; w < set; ++w) {

@@ -245,7 +245,7 @@ abstract contract RebalanceInvariantTest is Test {
     function homeHints() internal pure virtual returns (bool);
 
     function setUp() public {
-        store = new EntryStore(2, homeHints());
+        store = new EntryStore(2, 0, homeHints());
         handler = new RebalanceHandler(store);
 
         // The model assumes no two keys share a fingerprint, so any request it accepts is valid.
