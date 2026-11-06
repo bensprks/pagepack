@@ -239,12 +239,18 @@ library PagePack {
     ///         several sizes. Look up, hint and fingerprint them through it as through the map.
     /// @dev Cheap enough to call on every lookup: it only rewrites a byte of the handle. Reverts
     ///      unless an entry of that size fits a packed page's data region.
-    function sized(PagedMap m, uint256 slots) internal pure returns (PagedMap) {
-        unchecked {
-            if (slots - 1 >= m.dataSlotsPerPage()) revert EntryTooWide(slots);
+    function sized(PagedMap m, uint256 slots) internal pure returns (PagedMap handle) {
+        bool tooWide;
+
+        assembly ("memory-safe") {
+            // slots - 1 wraps for 0, so one comparison checks 1 <= slots <= the data slots.
+            let dataSlots := sub(PAGE_SIZE, and(shr(PER_PAGE_SHIFT, m), 0xff))
+
+            tooWide := iszero(lt(sub(slots, 1), dataSlots))
+            handle := or(and(m, not(SLOTS_BYTE)), shl(SLOTS_SHIFT, slots))
         }
 
-        return _withSlots(m, slots);
+        if (tooWide) revert EntryTooWide(slots);
     }
 
     /// @notice Number of data slots in each entry this handle looks up: the map's own size, or
