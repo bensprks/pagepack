@@ -84,10 +84,10 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 158,495 | 79,762 (-50%) | 77,213 (-51%) |
-| Re-quote 3 orders, one market | 106,006 | 74,269 (-30%) | 67,091 (-37%) |
-| Taker vs 3 makers | 206,535 | 126,779 (-39%) | 118,316 (-43%) |
-| Taker vs 14 makers | 706,264 | 330,823 (-53%) | 320,490 (-55%) |
+| Re-quote 1 order, maker in 6 markets | 158,495 | 84,113 (-47%) | 76,473 (-52%) |
+| Re-quote 3 orders, one market | 106,006 | 76,954 (-27%) | 66,969 (-37%) |
+| Taker vs 3 makers | 206,535 | 129,945 (-37%) | 117,327 (-43%) |
+| Taker vs 14 makers | 706,264 | 342,197 (-52%) | 318,918 (-55%) |
 
 | Operation | Mappings |
 | --- | ---: |
@@ -108,12 +108,12 @@ account; the others quote one market. The taker is a long-tail account and is no
 
   | Map name | pagepack |
   | --- | ---: |
-  | pagepack.exchange | 330,823 |
-  | pagepack.exchange.1 | 331,479 |
-  | pagepack.exchange.2 | 334,491 |
-  | pagepack.exchange.3 | 330,178 |
-  | pagepack.exchange.4 | 336,252 |
-  | pagepack.exchange.5 | 330,061 |
+  | pagepack.exchange | 342,197 |
+  | pagepack.exchange.1 | 344,047 |
+  | pagepack.exchange.2 | 351,758 |
+  | pagepack.exchange.3 | 333,126 |
+  | pagepack.exchange.4 | 344,433 |
+  | pagepack.exchange.5 | 334,826 |
 
   Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
@@ -128,6 +128,6 @@ The admin applies layouts chosen offchain from recent activity, e.g. daily:
 1. Rank accounts by how often they trade, and markets by how often they are read.
 2. Place each hot account's account, order-slot and position entries together, and every market
    entry on one page. Entries with the same `index / entriesPerPage()` share a page (64 here).
-3. Call `rebalance(evictions, placements)` with only the entries that change. It applies as one
-   step, so a layout can swap entries directly. Old hints keep working, without the saving,
-   until callers refresh them with `hintOf`.
+3. Call `rebalance(placements)` with only the entries that change, placing evicted ones at
+   `PagePack.HOME`. It applies as one step, so a layout can swap entries directly. Old hints
+   keep working, without the saving, until callers refresh them with `hintOf`.
