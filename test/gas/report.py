@@ -56,7 +56,22 @@ TABLES = [
         "title": "Library: rebalancing",
         "label": "Operation",
         "columns": [("pagepack", "pagepack-rebalance")],
-        "rows": ["Move a 3-slot entry within a page"],
+        "percentages": False,
+        "rows": [
+            "Move a 3-slot entry within a page",
+            "Pack a 1-slot entry into a gap",
+            "Pack a 2-slot entry, moving 62 slots",
+        ],
+    },
+    {
+        "title": "Library: spending from two-slot accounts under one-slot approvals, hinted",
+        "label": "Accounts in one transaction",
+        "columns": [
+            ("Two maps", "mixed-two-maps"),
+            ("One map, width 2", "mixed-pinned"),
+            ("One map of both sizes", "mixed-sizes"),
+        ],
+        "rows": ["10 accounts", "25 accounts"],
     },
     {
         "title": "Library: rebalancing by number of packed entries (one-slot entries)",
