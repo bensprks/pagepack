@@ -36,8 +36,8 @@ contract BalanceMapTest is Test {
 
         _pack(alice, bob);
 
-        // Packed side by side: each entry is an identity word plus one data slot.
-        assertEq(_slot(bob), _slot(alice) + 2);
+        // Packed side by side after the page's tags, one data slot each.
+        assertEq(_slot(bob), _slot(alice) + 1);
         assertEq(BALANCES.map().hintOf(balanceKey(bob)), 2);
 
         BALANCES.find(bob).base += 1;
@@ -60,7 +60,7 @@ contract BalanceMapTest is Test {
         assertEq(BALANCES.find(account).quote, 100);
         (bytes32[] memory reads,) = vm.accesses(address(this));
 
-        // The identity word, then the data.
+        // The tag, then the data.
         assertEq(reads.length, 2);
     }
 

@@ -127,7 +127,7 @@ contract TypedEntriesTest is Test {
     }
 
     /// What the check prevents: a wider struct over a packed entry writes into the next entry's
-    /// identity word, and the next entry can no longer be found.
+    /// data.
     function test_widerStructOverwritesTheNextEntry() public {
         bytes32 next = "next";
         _vault(VAULTS.find(next)).debt = 500;
@@ -137,9 +137,10 @@ contract TypedEntriesTest is Test {
         _overfullVault(e).limits = [uint256(1), uint256(1)];
 
         // The entry's last slot is set, as if the struct fit, so checking that slot alone
-        // would miss the overflow.
+        // would miss the overflow. The array's second element is the next entry's first slot.
         assertNotEq(e.read(VAULTS.width() - 1), 0);
-        assertEq(_vault(VAULTS.find(next)).debt, 0);
+        assertEq(_vault(VAULTS.find(next)).owner, address(1));
+        assertEq(_vault(VAULTS.find(next)).debt, 500);
     }
 
     /// A struct pointer is only as current as the lookup it came from.

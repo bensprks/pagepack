@@ -230,8 +230,8 @@ contract PagePackTest is Test {
         _fill(b, 20);
         _pack(a, 0);
 
-        // b shares a's fingerprint, so the directory points at a's slot. The identity word tells
-        // them apart and b resolves to its home.
+        // b shares a's fingerprint, so the directory points at a's index. The tag tells them
+        // apart and b resolves to its home.
         assertEq(store.slotOf(b), _home(b));
         assertEq(store.hintOf(b), 0);
         assertEq(store.get(b, 0), 20);
@@ -274,9 +274,11 @@ contract PagePackTest is Test {
         assertEq(store.packedCount(), 0);
         _assertFilled(key, 10);
 
-        // Identity and data words of the old packed slot are cleared.
-        for (uint256 i; i < 4; ++i) {
-            assertEq(uint256(vm.load(address(store), bytes32(packedSlot - 1 + i))), 0);
+        // The old index's tag and data slots are cleared.
+        assertEq(_load(_tagSlot(3)), 0);
+
+        for (uint256 i; i < 3; ++i) {
+            assertEq(_load(packedSlot + i), 0);
         }
     }
 
@@ -524,7 +526,7 @@ contract PagePackTest is Test {
     // ------------------------------------------------------------------------------------------
 
     function test_entriesNeverStraddlePages() public {
-        // Width 3 plus an identity word: 32 entries per page, exactly filling it.
+        // Width 3 and a tag each: 32 entries per page, exactly filling it.
         uint256 perPage = store.entriesPerPage();
         assertEq(perPage, 32);
 
@@ -537,16 +539,18 @@ contract PagePackTest is Test {
         store.rebalance(_noKeys(), placements);
 
         for (uint256 i; i < placements.length; ++i) {
-            uint256 first = store.slotOf(_key(i)) - 1;
-            uint256 last = first + 3;
+            uint256 first = store.slotOf(_key(i));
+            uint256 last = first + 2;
 
             assertEq(first >> 7, last >> 7, "entry straddles a page");
+            assertEq(first >> 7, _tagSlot(i) >> 7, "data and tag on different pages");
             assertEq(first >> 7, (store.slotOf(_key(0)) >> 7) + i / perPage, "wrong page");
+            assertGe(first & 127, perPage, "data in the tag region");
         }
     }
 
     function test_wideEntriesLeaveUnusedTail() public {
-        // Width 4 plus an identity word: 25 entries per page with 3 slots left over.
+        // Width 4 and a tag each: 25 entries per page with 3 slots left over.
         EntryStore wide = new EntryStore(4, false);
         assertEq(wide.entriesPerPage(), 25);
 
@@ -558,11 +562,12 @@ contract PagePackTest is Test {
 
         wide.rebalance(_noKeys(), placements);
 
-        uint256 lastOnFirstPage = wide.slotOf(_key(24)) - 1;
-        uint256 firstOnSecondPage = wide.slotOf(_key(25)) - 1;
+        uint256 lastOnFirstPage = wide.slotOf(_key(24));
+        uint256 firstOnSecondPage = wide.slotOf(_key(25));
 
-        assertEq(lastOnFirstPage & 127, 120);
-        assertEq(firstOnSecondPage & 127, 0);
+        // Tags take slots 0 to 24, so data starts at 25 and the last entry ends at 124.
+        assertEq(lastOnFirstPage & 127, 121);
+        assertEq(firstOnSecondPage & 127, 25);
         assertEq(firstOnSecondPage >> 7, (lastOnFirstPage >> 7) + 1);
     }
 
@@ -748,6 +753,17 @@ contract PagePackTest is Test {
 
     function _directory() internal view returns (uint256) {
         return uint256(keccak256(abi.encode(store.MAP()))) & ~uint256(127);
+    }
+
+    /// The slot holding packed `index`'s tag: packed pages follow the directory, and each starts
+    /// with its tags.
+    function _tagSlot(uint256 index) internal view returns (uint256) {
+        uint256 perPage = store.entriesPerPage();
+        return _directory() + 128 * (index / perPage + 1) + index % perPage;
+    }
+
+    function _load(uint256 location) internal view returns (uint256) {
+        return uint256(vm.load(address(store), bytes32(location)));
     }
 
     function _assertNotRead(bytes32[] memory reads, uint256 location) internal pure {

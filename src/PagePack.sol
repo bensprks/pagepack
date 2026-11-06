@@ -22,8 +22,8 @@ type PagedMap is bytes32;
 ///
 /// An Entry is a raw storage pointer, and so is a struct laid over one. Nothing checks how they
 /// are used:
-/// - Offsets aren't bounds-checked. Offset `width` is already the next entry's identity word,
-///   so a struct must be at most `width` slots. Take the width from the struct, or check it with
+/// - Offsets aren't bounds-checked. Offset `width` is already the next entry's data, so a
+///   struct must be at most `width` slots. Take the width from the struct, or check it with
 ///   {requireFits}. Either way, measure the struct with a helper: in a `T[2] storage` array placed
 ///   at slot 0, element 1's slot is T's size in slots. Declare the helper `view`, not `pure`: the
 ///   compiler treats indexing a storage array as a possible read, though nothing is read.
@@ -52,21 +52,28 @@ using PagePack for Entry global;
 ///            and it costs the same as a mapping entry. In a map made with
 ///            {mapWithHomeHints}, the last slot of the home page holds a flag while the entry
 ///            is packed.
-///   packed   a numbered slot in the map's packed region, placed there by {rebalance}. Each
-///            packed entry is an identity word followed by its data, so a lookup can confirm it
-///            found the right entry.
+///   packed   a numbered index in the map's packed region, placed there by {rebalance}. Each
+///            packed page starts with a tag for each of its indices, and the entries' data
+///            fills the rest of the page. A tag holds the entry's identity, so a lookup can
+///            confirm it found the right entry, and where on the page its data is.
 ///
 /// Each map keeps one directory page mapping a short fingerprint of every packed entry to its
 /// index. A lookup without a hint searches the directory, paying for that page once per
 /// transaction. A lookup with a correct hint skips the directory entirely: a packed index is
-/// checked against the identity word, and a HOME hint (home-hint maps only) against the flag.
+/// checked against its tag, and a HOME hint (home-hint maps only) against the flag.
 ///
 /// Storage layout of a map, all page-aligned:
 ///
 ///   D = keccak256(map) rounded down to a page boundary
 ///   D + 0              number of packed entries
 ///   D + 1 .. D + 127   directory entries, 8 per slot, sorted by fingerprint (see LibDirectory)
-///   D + 128 ...        packed pages, floor(128 / (width + 1)) entries each
+///   D + 128 ...        packed pages of T = {entriesPerPage} indices each:
+///                        slots 0 .. T - 1     a tag per index, zero while the index is empty
+///                        slots T .. 127       entries' data
+///
+/// A tag is the entry's identity with its low 14 bits replaced by where its data starts on the
+/// page (bits 7 to 13) and its size in slots (bits 0 to 6). Lookups only ever read tags from the
+/// tag region, so nothing written into an entry's data can pose as a tag.
 library PagePack {
     struct Placement {
         bytes32 key;
@@ -78,13 +85,17 @@ library PagePack {
         uint256 hint;
     }
 
-    /// An entry named in a rebalance: where it is and where it goes. Internal to {rebalance}.
+    /// An entry named in a rebalance: where it is and where it goes, as packed indices and as
+    /// the first slot of its data. Internal to {rebalance}.
     struct Move {
         bytes32 key;
         uint256 id;
+        uint256 slots;
         uint256 from;
         uint256 to;
         uint256 position;
+        uint256 source;
+        uint256 target;
     }
 
     error InvalidWidth(uint256 width);
@@ -112,6 +123,12 @@ library PagePack {
     // The low byte of a map: its width, and a bit for maps that keep home flags.
     uint256 private constant WIDTH_MASK = 0x7f;
     uint256 private constant HOME_HINTS = 0x80;
+
+    // A tag's low 14 bits: where the entry's data starts on its page, and its size. The bits
+    // above are the entry's identity.
+    uint256 private constant TAG_OFFSET_SHIFT = 7;
+    uint256 private constant TAG_FIELD_MASK = 0x7f;
+    uint256 private constant TAG_IDENTITY_SHIFT = 14;
 
     // A move's position when the entry is at home.
     uint256 private constant AT_HOME = type(uint256).max;
@@ -161,9 +178,13 @@ library PagePack {
         return uint256(PagedMap.unwrap(m)) & HOME_HINTS != 0;
     }
 
-    /// @notice Number of packed entries that fit on one page.
-    function entriesPerPage(PagedMap m) internal pure returns (uint256) {
-        return PAGE_SIZE / (m.width() + 1);
+    /// @notice Number of packed entries that fit on one page, each with its tag.
+    function entriesPerPage(PagedMap m) internal pure returns (uint256 perPage) {
+        uint256 slots = m.width();
+
+        assembly ("memory-safe") {
+            perPage := div(PAGE_SIZE, add(slots, 1))
+        }
     }
 
     /// @notice Number of entries currently packed.
@@ -200,13 +221,14 @@ library PagePack {
             }
 
             uint256 dir = _directory(m);
+            uint256 perPage = m.entriesPerPage();
 
             // The same checks as find(key, hint), repeated here to keep this hot path inline.
             // Most lookups have no hint, so they skip both checks with one comparison.
             if (hint != 0) {
                 if (hint - 1 < MAX_INDEX) {
-                    uint256 location = _packedSlot(dir, m.width() + 1, hint - 1);
-                    if (_load(location) == id) return Entry.wrap(location + 1);
+                    (bool tagged, uint256 data) = _packed(dir, perPage, id, hint - 1);
+                    if (tagged) return Entry.wrap(data);
                 } else if (hint == HOME && m.homeHints()) {
                     if (_load(_packedFlag(id)) == 0) return Entry.wrap(_home(id));
                 }
@@ -215,11 +237,9 @@ library PagePack {
             (bool found, uint256 index,) = LibDirectory.search(dir, id);
 
             if (found) {
-                uint256 location = _packedSlot(dir, m.width() + 1, index);
-
-                // Fingerprints are short, so a match is only a candidate until the identity
-                // agrees.
-                if (_load(location) == id) return Entry.wrap(location + 1);
+                // Fingerprints are short, so a match is only a candidate until the tag agrees.
+                (bool tagged, uint256 data) = _packed(dir, perPage, id, index);
+                if (tagged) return Entry.wrap(data);
             }
 
             return Entry.wrap(_home(id));
@@ -234,9 +254,10 @@ library PagePack {
             // hint - 1 wraps to a huge number when hint is 0, so one comparison rejects both
             // "no hint" and out-of-range hints.
             if (hint - 1 < MAX_INDEX) {
-                uint256 location = _packedSlot(_directory(m), m.width() + 1, hint - 1);
+                (bool tagged, uint256 data) =
+                    _packed(_directory(m), m.entriesPerPage(), _identity(m, key), hint - 1);
 
-                if (_load(location) == _identity(m, key)) return Entry.wrap(location + 1);
+                if (tagged) return Entry.wrap(data);
             } else if (hint == HOME && m.homeHints()) {
                 uint256 id = _identity(m, key);
 
@@ -278,7 +299,7 @@ library PagePack {
     ///         HOME in a home-hint map, and 0 (no hint) elsewhere.
     /// @dev Meant to be called offchain (via an eth_call wrapper) to build hints for a batch.
     function hintOf(PagedMap m, bytes32 key) internal view returns (uint256) {
-        (uint256 index,) = _locate(_directory(m), m.width() + 1, _identity(m, key));
+        (uint256 index,,) = _locate(_directory(m), m.entriesPerPage(), _identity(m, key));
 
         if (index != AT_HOME) return index + 1;
 
@@ -336,11 +357,11 @@ library PagePack {
         if (evictions.length == 0 && placements.length == 0) return;
 
         uint256 dir = _directory(m);
-        uint256 stride = m.width() + 1;
+        uint256 perPage = m.entriesPerPage();
 
-        (Move[] memory moves, uint256 added) = _plan(m, dir, stride, evictions, placements);
+        (Move[] memory moves, uint256 added) = _plan(m, dir, perPage, evictions, placements);
 
-        _relocate(dir, stride, moves, m.homeHints());
+        _relocate(dir, perPage, moves, m.homeHints());
         _updateIndices(dir, moves);
 
         if (evictions.length != 0 || added != 0) _rebuild(dir, moves, evictions.length, added);
@@ -352,7 +373,7 @@ library PagePack {
     function _plan(
         PagedMap m,
         uint256 dir,
-        uint256 stride,
+        uint256 perPage,
         bytes32[] memory evictions,
         Placement[] memory placements
     ) private view returns (Move[] memory moves, uint256 added) {
@@ -365,14 +386,13 @@ library PagePack {
         uint256[4] memory claimed;
 
         for (uint256 i; i < evictions.length; ++i) {
-            bytes32 key = evictions[i];
-            uint256 id = _identity(m, key);
-            (uint256 from, uint256 position) = _locate(dir, stride, id);
+            Move memory move = _moveOf(m, dir, perPage, evictions[i]);
 
-            if (from == AT_HOME) revert NotPacked(key);
-            if (_mark(named, from)) revert DuplicateKey(key);
+            if (move.from == AT_HOME) revert NotPacked(move.key);
+            if (_mark(named, move.from)) revert DuplicateKey(move.key);
 
-            moves[count++] = Move(key, id, from, AT_HOME, position);
+            move.target = _home(move.id);
+            moves[count++] = move;
         }
 
         for (uint256 i; i < placements.length; ++i) {
@@ -380,20 +400,22 @@ library PagePack {
             if (p.index >= MAX_INDEX) revert IndexOutOfRange(p.index);
             if (_mark(claimed, p.index)) revert IndexTaken(p.index);
 
-            uint256 id = _identity(m, p.key);
-
             // A resubmitted entry is usually already in place, which also skips the search.
-            if (_load(_packedSlot(dir, stride, p.index)) == id) {
+            if (_holds(_load(_tagSlot(dir, perPage, p.index)), _identity(m, p.key))) {
                 if (_mark(named, p.index)) revert DuplicateKey(p.key);
                 continue;
             }
 
-            (uint256 from, uint256 position) = _locate(dir, stride, id);
+            Move memory move = _moveOf(m, dir, perPage, p.key);
 
-            if (from == AT_HOME) ++added;
-            else if (_mark(named, from)) revert DuplicateKey(p.key);
+            if (move.from == AT_HOME) ++added;
+            else if (_mark(named, move.from)) revert DuplicateKey(p.key);
 
-            moves[count++] = Move(p.key, id, from, p.index, position);
+            // Each index's data has a fixed place after the tags.
+            move.to = p.index;
+            move.target =
+                _pageStart(dir, perPage, p.index) + perPage + (p.index % perPage) * move.slots;
+            moves[count++] = move;
         }
 
         // A target must be empty or hold an entry this call names. Since no two placements share
@@ -401,7 +423,7 @@ library PagePack {
         for (uint256 i = evictions.length; i < count; ++i) {
             uint256 index = moves[i].to;
 
-            if (!_isMarked(named, index) && _load(_packedSlot(dir, stride, index)) != 0) {
+            if (!_isMarked(named, index) && _load(_tagSlot(dir, perPage, index)) != 0) {
                 revert IndexTaken(index);
             }
         }
@@ -411,44 +433,71 @@ library PagePack {
         }
     }
 
-    /// Moves each entry's identity and data. Every source is read and cleared before any
-    /// destination is written, so an entry can move into a slot another is leaving. Clearing
-    /// first also keeps a page's occupied-slot count from rising past where it started, so moves
-    /// within a page don't pay MIP-8's 17,000 gas state-growth charge. Home flags are set and
-    /// cleared alongside, when the map keeps them.
-    function _relocate(uint256 dir, uint256 stride, Move[] memory moves, bool flags) private {
-        uint256 slots = stride - 1;
-        uint256[] memory data = new uint256[](moves.length * slots);
+    /// A move of the entry for `key` from wherever it is now. The caller says where it goes.
+    function _moveOf(PagedMap m, uint256 dir, uint256 perPage, bytes32 key)
+        private
+        view
+        returns (Move memory move)
+    {
+        uint256 id = _identity(m, key);
+        (uint256 from, uint256 position, uint256 source) = _locate(dir, perPage, id);
 
+        return Move(key, id, m.width(), from, AT_HOME, position, source, 0);
+    }
+
+    /// Moves each entry's tag and data. Every source is read and cleared before any destination
+    /// is written, so an entry can move into slots another is leaving. Clearing first also keeps
+    /// a page's occupied-slot count from rising past where it started, so moves within a page
+    /// don't pay MIP-8's 17,000 gas state-growth charge. Home flags are set and cleared
+    /// alongside, when the map keeps them.
+    function _relocate(uint256 dir, uint256 perPage, Move[] memory moves, bool flags) private {
+        uint256 total;
         for (uint256 i; i < moves.length; ++i) {
-            Move memory m = moves[i];
-
-            uint256 from = _dataSlot(dir, stride, m.id, m.from);
-            if (m.from != AT_HOME) _store(from - 1, 0);
-            if (flags && m.to == AT_HOME) _store(_packedFlag(m.id), 0);
-
-            // Zero words are skipped: there is nothing to clear and nothing to copy.
-            for (uint256 w; w < slots; ++w) {
-                uint256 value = _load(from + w);
-
-                if (value != 0) {
-                    data[i * slots + w] = value;
-                    _store(from + w, 0);
-                }
-            }
+            if (moves[i].source != moves[i].target) total += moves[i].slots;
         }
 
+        uint256[] memory data = new uint256[](total);
+        uint256 cursor;
+
         for (uint256 i; i < moves.length; ++i) {
             Move memory m = moves[i];
 
-            uint256 to = _dataSlot(dir, stride, m.id, m.to);
-            if (m.to != AT_HOME) _store(to - 1, m.id);
-            if (flags && m.from == AT_HOME) _store(_packedFlag(m.id), 1);
+            if (m.from != AT_HOME) _store(_tagSlot(dir, perPage, m.from), 0);
+            if (flags && m.to == AT_HOME) _store(_packedFlag(m.id), 0);
+            if (m.source == m.target) continue;
 
-            for (uint256 w; w < slots; ++w) {
-                uint256 value = data[i * slots + w];
-                if (value != 0) _store(to + w, value);
+            // Zero words are skipped: there is nothing to clear and nothing to copy.
+            for (uint256 w; w < m.slots; ++w) {
+                uint256 value = _load(m.source + w);
+
+                if (value != 0) {
+                    data[cursor + w] = value;
+                    _store(m.source + w, 0);
+                }
             }
+
+            cursor += m.slots;
+        }
+
+        cursor = 0;
+
+        for (uint256 i; i < moves.length; ++i) {
+            Move memory m = moves[i];
+
+            if (m.to != AT_HOME) {
+                uint256 offset = m.target - _pageStart(dir, perPage, m.to);
+                _store(_tagSlot(dir, perPage, m.to), _tag(m.id, offset, m.slots));
+            }
+
+            if (flags && m.from == AT_HOME) _store(_packedFlag(m.id), 1);
+            if (m.source == m.target) continue;
+
+            for (uint256 w; w < m.slots; ++w) {
+                uint256 value = data[cursor + w];
+                if (value != 0) _store(m.target + w, value);
+            }
+
+            cursor += m.slots;
         }
     }
 
@@ -458,7 +507,7 @@ library PagePack {
 
     /// Identifies an entry in packed storage and derives its home and fingerprint. Hashing the
     /// map in means the same key in two maps never collides, and the result is never zero in
-    /// practice, so zero can mark an empty packed slot.
+    /// practice, so a zero tag can mark an empty index.
     function _identity(PagedMap m, bytes32 key) private pure returns (uint256 id) {
         assembly ("memory-safe") {
             mstore(0x00, m)
@@ -485,30 +534,55 @@ library PagePack {
         return _home(id) + PAGE_SIZE - 1;
     }
 
-    /// The first data slot of an entry at packed `index`, or at home.
-    function _dataSlot(uint256 dir, uint256 stride, uint256 id, uint256 index)
-        private
-        pure
-        returns (uint256)
-    {
-        return index == AT_HOME ? _home(id) : _packedSlot(dir, stride, index) + 1;
+    /// The tag for an entry whose data starts `offset` slots into its page.
+    function _tag(uint256 id, uint256 offset, uint256 slots) private pure returns (uint256) {
+        return
+            (id >> TAG_IDENTITY_SHIFT << TAG_IDENTITY_SHIFT) | (offset << TAG_OFFSET_SHIFT) | slots;
     }
 
-    /// Entries never straddle pages: each page holds floor(128 / stride) whole entries and the
-    /// remainder is left unused.
+    /// Whether `tag` belongs to the entry with identity `id`.
+    function _holds(uint256 tag, uint256 id) private pure returns (bool) {
+        return tag >> TAG_IDENTITY_SHIFT == id >> TAG_IDENTITY_SHIFT;
+    }
+
+    /// Reads the tag at packed `index` and returns whether it belongs to `id`, and where the
+    /// data it points to starts.
     ///
-    /// Runs on every packed lookup. stride is 2..128 and index < 1024, so nothing can overflow
+    /// Runs on every packed lookup. perPage is 1..64 and index < 1024, so nothing can overflow
     /// or divide by zero, and skipping Solidity's checks here saves a few hundred gas per call.
-    function _packedSlot(uint256 dir, uint256 stride, uint256 index)
+    function _packed(uint256 dir, uint256 perPage, uint256 id, uint256 index)
+        private
+        view
+        returns (bool tagged, uint256 data)
+    {
+        assembly ("memory-safe") {
+            let page := add(dir, shl(7, add(div(index, perPage), 1)))
+            let tag := sload(add(page, mod(index, perPage)))
+
+            tagged := eq(shr(TAG_IDENTITY_SHIFT, tag), shr(TAG_IDENTITY_SHIFT, id))
+            data := add(page, and(shr(TAG_OFFSET_SHIFT, tag), TAG_FIELD_MASK))
+        }
+    }
+
+    /// The first slot of the packed page holding `index`. Packed pages follow the directory.
+    function _pageStart(uint256 dir, uint256 perPage, uint256 index)
+        private
+        pure
+        returns (uint256 start)
+    {
+        assembly ("memory-safe") {
+            start := add(dir, shl(7, add(div(index, perPage), 1)))
+        }
+    }
+
+    /// The slot holding the tag for packed `index`.
+    function _tagSlot(uint256 dir, uint256 perPage, uint256 index)
         private
         pure
         returns (uint256 location)
     {
         assembly ("memory-safe") {
-            let perPage := div(PAGE_SIZE, stride)
-            let page := add(1, div(index, perPage))
-
-            location := add(add(dir, shl(7, page)), mul(mod(index, perPage), stride))
+            location := add(add(dir, shl(7, add(div(index, perPage), 1))), mod(index, perPage))
         }
     }
 
@@ -516,16 +590,23 @@ library PagePack {
     // Directory
     // ------------------------------------------------------------------------------------------
 
-    /// An entry's packed index and directory position, or AT_HOME if it isn't packed.
-    function _locate(uint256 dir, uint256 stride, uint256 id)
+    /// An entry's packed index, directory position and first data slot. An entry that isn't
+    /// packed is AT_HOME, at its home.
+    function _locate(uint256 dir, uint256 perPage, uint256 id)
         private
         view
-        returns (uint256 index, uint256 position)
+        returns (uint256 index, uint256 position, uint256 data)
     {
         bool found;
         (found, index, position) = LibDirectory.search(dir, id);
 
-        if (!found || _load(_packedSlot(dir, stride, index)) != id) return (AT_HOME, 0);
+        if (found) {
+            bool tagged;
+            (tagged, data) = _packed(dir, perPage, id, index);
+            if (tagged) return (index, position, data);
+        }
+
+        return (AT_HOME, 0, _home(id));
     }
 
     /// Rewrites the index bits of entries that moved between packed slots. Their fingerprints
