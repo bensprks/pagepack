@@ -34,6 +34,18 @@ TABLES = [
         ],
     },
     {
+        "title": "Library: updating packed one-slot entries over 16 key sets",
+        "label": "Entries updated",
+        "columns": [
+            ("No hint, mean", "pagepack-key-sets"),
+            ("No hint, lowest", "pagepack-key-sets-lowest"),
+            ("No hint, highest", "pagepack-key-sets-highest"),
+            ("Hinted, mean", "pagepack-key-sets-hinted"),
+        ],
+        "percentages": False,
+        "rows": ["10 entries", "64 entries, a full page"],
+    },
+    {
         "title": "Library: directory search, page already loaded (1,024 searches each)",
         "label": "Directory and entry",
         "columns": [
@@ -56,7 +68,25 @@ TABLES = [
         "title": "Library: rebalancing",
         "label": "Operation",
         "columns": [("pagepack", "pagepack-rebalance")],
-        "rows": ["Move a 3-slot entry within a page"],
+        "percentages": False,
+        "rows": [
+            "Move a 3-slot entry within a page",
+            "Pack a 1-slot entry into a gap",
+            "Pack a 2-slot entry, moving 62 slots",
+            "Pack a 2-slot entry into a gap",
+            "Pack a 2-slot entry, moving 32 entries",
+        ],
+    },
+    {
+        "title": "Library: spending from two-slot accounts under one-slot approvals, hinted",
+        "label": "Accounts in one transaction",
+        "columns": [
+            ("Mappings", "mixed-mappings"),
+            ("Two maps", "mixed-two-maps"),
+            ("One map, width 2", "mixed-pinned"),
+            ("One map of both sizes", "mixed-sizes"),
+        ],
+        "rows": ["10 accounts", "25 accounts"],
     },
     {
         "title": "Library: rebalancing by number of packed entries (one-slot entries)",

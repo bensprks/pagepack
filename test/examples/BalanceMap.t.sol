@@ -36,8 +36,8 @@ contract BalanceMapTest is Test {
 
         _pack(alice, bob);
 
-        // Packed side by side: each entry is an identity word plus one data slot.
-        assertEq(_slot(bob), _slot(alice) + 2);
+        // Packed side by side after the page's tags, one data slot each.
+        assertEq(_slot(bob), _slot(alice) + 1);
         assertEq(BALANCES.map().hintOf(balanceKey(bob)), 2);
 
         BALANCES.find(bob).base += 1;
@@ -60,16 +60,16 @@ contract BalanceMapTest is Test {
         assertEq(BALANCES.find(account).quote, 100);
         (bytes32[] memory reads,) = vm.accesses(address(this));
 
-        // The identity word, then the data.
+        // The tag, then the data.
         assertEq(reads.length, 2);
     }
 
     function _pack(address first, address second) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(balanceKey(first), 0);
-        placements[1] = PagePack.Placement(balanceKey(second), 1);
+        placements[0] = PagePack.Placement(balanceKey(first), 0, 0);
+        placements[1] = PagePack.Placement(balanceKey(second), 0, 1);
 
-        BALANCES.map().rebalance(new bytes32[](0), placements);
+        BALANCES.map().rebalance(placements);
     }
 
     function _slot(address account) internal view returns (uint256) {

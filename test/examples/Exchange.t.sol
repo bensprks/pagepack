@@ -334,7 +334,7 @@ contract PackedExchangeTest is ExchangeTest {
 
     function test_onlyAdminCanRebalance() public {
         vm.expectRevert(Exchange.NotAdmin.selector);
-        _packed().rebalance(new bytes32[](0), new PagePack.Placement[](0));
+        _packed().rebalance(new PagePack.Placement[](0));
     }
 
     function test_stateSurvivesRebalancing() public {
@@ -351,7 +351,7 @@ contract PackedExchangeTest is ExchangeTest {
         _assertMakerState();
 
         vm.prank(admin);
-        _packed().rebalance(keys, new PagePack.Placement[](0));
+        _packed().rebalance(_evictions(keys));
 
         _assertMakerState();
     }
@@ -372,7 +372,7 @@ contract PackedExchangeTest is ExchangeTest {
 
         // Evict everything: every hint is now stale but must still resolve correctly.
         vm.prank(admin);
-        _packed().rebalance(keys, new PagePack.Placement[](0));
+        _packed().rebalance(_evictions(keys));
 
         vm.prank(operator);
         exchange.settle(taker, _fill(maker, 0, 10), hints);
@@ -393,11 +393,22 @@ contract PackedExchangeTest is ExchangeTest {
     function _pack(bytes32[] memory keys) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], i);
+            placements[i] = PagePack.Placement(keys[i], 0, i);
         }
 
         vm.prank(admin);
-        _packed().rebalance(new bytes32[](0), placements);
+        _packed().rebalance(placements);
+    }
+
+    function _evictions(bytes32[] memory keys)
+        internal
+        pure
+        returns (PagePack.Placement[] memory placements)
+    {
+        placements = new PagePack.Placement[](keys.length);
+        for (uint256 i; i < keys.length; ++i) {
+            placements[i] = PagePack.Placement(keys[i], 0, PagePack.HOME);
+        }
     }
 
     function _assertMakerState() internal view {

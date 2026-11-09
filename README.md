@@ -28,7 +28,7 @@ It pays off when:
 
 - **Transactions touch entries under many different keys.** A mapping of structs already keeps
   one key's fields on one page. pagepack puts entries under different keys on the same page. A
-  transaction that touches one entry costs more than with a regular mapping: +4% with a hint, +30%
+  transaction that touches one entry costs more than with a regular mapping: +4% with a hint, +28%
   without.
 - **A small set of entries gets most of the traffic, and that set changes over time.** An
   offchain planner tracks which entries are used together, and the admin calls `rebalance` to
@@ -41,17 +41,18 @@ Updating existing one-slot balances in one transaction, from `make gas` on Monad
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,572 (+30%) | 34,813 (+4%) |
-| 2 entries | 45,321 | 46,439 (+2%) | 36,445 (-20%) |
-| 10 entries | 139,537 | 67,616 (-52%) | 49,609 (-64%) |
-| 30 entries | 375,029 | 123,085 (-67%) | 82,441 (-78%) |
-| 64 entries, a full page | 775,423 | 215,318 (-72%) | 138,313 (-82%) |
-| 2 unpacked entries | 45,309 | 56,398 (+24%) | – |
+| 1 entry | 33,556 | 43,071 (+28%) | 34,846 (+4%) |
+| 2 entries | 45,321 | 45,997 (+1%) | 36,485 (-19%) |
+| 10 entries | 139,537 | 67,739 (-51%) | 49,705 (-64%) |
+| 30 entries | 375,029 | 127,596 (-66%) | 82,677 (-78%) |
+| 64 entries, a full page | 775,423 | 227,992 (-71%) | 138,787 (-82%) |
+| 2 unpacked entries | 45,309 | 57,126 (+26%) | – |
 
-A page holds 64 one-slot entries, not 128, because each packed entry is stored next to a one-slot
-identity word. Entries that aren't packed cost more than in a regular mapping, because the lookup
+A page holds 64 one-slot entries, not 128, because each packed entry also has a one-slot tag on
+the page. Entries that aren't packed cost more than in a regular mapping, because the lookup
 still searches the directory. In a map created with `mapWithHomeHints`, a `HOME` hint reduces this
-to +6% (see the [full table](docs/reference.md#results)).
+to +4% (see the [full table](docs/reference.md#results)). Costs without a hint also vary by a few
+percent with the keys, which the reference shows over 16 key sets.
 
 ## Usage
 
@@ -100,12 +101,15 @@ contract OrderBook {
 ```
 
 `balances[maker]` becomes `BALANCES.find(maker)`, and hints are optional. The admin packs the
-busiest makers with `BALANCES.map().rebalance(evictions, placements)`.
+busiest makers with `BALANCES.map().rebalance(placements)`.
 
 Entries share pages only within one map, so put entities used together, such as an account and
 its positions, in one map with a getter per kind. The exchange's
-[`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) does this, checking each struct against
-the map's width with `requireFits` at deploy. To work with raw slots instead of structs, see
+[`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) does this for four kinds of one-slot
+entry. Kinds of different sizes can share a map too:
+[`AccountMap.sol`](examples/accounts/AccountMap.sol) keeps two-slot accounts and one-slot
+approvals on the same pages, and each getter looks its kind up at its struct's size with
+`sized`. To work with raw slots instead of structs, see
 [using `PagedMap` directly](docs/reference.md#using-pagedmap-directly).
 
 ### Setup
@@ -128,9 +132,10 @@ An entry lives in one of two places:
 
 - **Home**: `keccak256(map, key)`, rounded down to the start of a page. Each entry has its own
   home page, as in a regular mapping. Every entry starts at home.
-- **Packed**: a position on the map's packed pages, assigned by `rebalance`. Each packed entry is
-  stored after an identity word, `keccak256(map, key)`, so a page holds
-  `floor(128 / (width + 1))` entries: 64 one-slot or 42 two-slot.
+- **Packed**: an index on the map's packed pages, assigned by `rebalance`. Each packed page
+  starts with a one-slot tag per index, holding the entry's identity, `keccak256(map, key)`, and
+  where on the page its data is. So a page holds `floor(128 / (width + 1))` entries of the map's
+  width, 64 one-slot or 42 two-slot, or a mix of sizes that fits.
 
 A **directory** page lists the packed entries by fingerprint. `find(key)` checks the hint if
 there is one, otherwise searches the directory (about 1,000 to 1,400 gas once its page is
@@ -141,9 +146,10 @@ gas but never returns the wrong entry.
 them with the transaction, and the contract loads them once with `useHints`. Maps made with
 `mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 
-**Rebalancing** takes a list of entries to move and their new positions, and applies all moves at
-once, so two entries can swap positions. Packing a one-slot entry costs about 58,000 gas. Swapping
-two packed entries costs about 60,000. pagepack has no access control: your contract decides who
+**Rebalancing** takes a list of placements, each an entry, its size and its new index, or `HOME`
+to send it back. It applies them all at once, so two entries can swap indices, and picks where on
+the page each entry's data goes. Packing a one-slot entry costs about 62,000 gas. Swapping two
+packed entries costs about 62,000. pagepack has no access control: your contract decides who
 rebalances. New entries always start on their home pages. Only `rebalance` packs them.
 
 The [reference](docs/reference.md) covers the storage layout, each step's cost, and planning
@@ -155,21 +161,28 @@ A struct from `find` is a raw storage pointer:
 
 - **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes live at slots derived
   from the entry's location, so a move leaves them behind.
-- **Fit the width.** The slot after a packed entry is the next one's identity word. A map of one
-  kind takes its width from the struct. A map of several kinds checks each struct with
-  `requireFits`.
+- **Fit the size.** The slot after a packed entry may hold another entry's data, so a struct must
+  fit the size it was looked up at. A map of one kind takes its width from the struct. A map of
+  several kinds looks each up with `sized(slots)` at its struct's size, or pins one width and
+  checks each struct with `requireFits`.
 - **Cast or bit-pack keys.** pagepack already hashes the key, so don't hash keys that fit in 32
   bytes. In a map of several kinds, include the kind in the key so keys of different kinds can't
   collide.
-- **Look entries up again after anything that could rebalance**, including an external call that
-  might re-enter.
+- **Keep the schema fixed.** A map's name, width, entries per page and home-hint mode, and each
+  kind's struct size, are part of every entry's identity. Changing one after deployment leaves
+  existing entries unreachable, so version the map's name and migrate instead. See
+  [storage schema](docs/reference.md#storage-schema).
+- **Look entries up again after any rebalance**, even one that doesn't name them: making room on
+  a page can move other entries' data. That includes an external call that might re-enter. If a
+  callback could reach your rebalance function, guard it and the functions holding entries with
+  one lock.
 
 ## Upgrades
 
-Proxies aren't supported yet. A map's name, home-hint mode, width and key encoding determine where
-its entries are stored, so they can't change after entries are written. pagepack's own storage
-format may change before 1.0. A future version may support upgrades using maps with a fixed width
-set in advance, leaving room for structs to grow.
+Proxies aren't supported yet. A map's name, home-hint mode, width, entries per page, entry sizes
+and key encoding determine where its entries are stored, so they can't change after entries are
+written. pagepack's own storage format may change before 1.0. A future version may support
+upgrades using maps with a fixed width set in advance, leaving room for structs to grow.
 
 ## Development
 

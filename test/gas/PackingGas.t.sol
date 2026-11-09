@@ -64,7 +64,7 @@ contract PackingGasTest is Test {
         internal
         returns (EntryStore store)
     {
-        store = new EntryStore(slots, homeHints);
+        store = new EntryStore(slots, 0, homeHints);
 
         for (uint256 i; i < EXISTING + NEW; ++i) {
             for (uint256 w; w < set; ++w) {
@@ -72,7 +72,7 @@ contract PackingGasTest is Test {
             }
         }
 
-        store.rebalance(new bytes32[](0), _placements(0, EXISTING));
+        store.rebalance(_placements(0, EXISTING));
     }
 
     function _pack(EntryStore store, string memory shape) internal {
@@ -85,7 +85,7 @@ contract PackingGasTest is Test {
             placements[i].index = first + i;
         }
 
-        store.rebalance(new bytes32[](0), placements);
+        store.rebalance(placements);
         vm.snapshotGasLastCall("pagepack-packing", shape);
 
         assertEq(store.packedCount(), EXISTING + NEW);
@@ -100,7 +100,7 @@ contract PackingGasTest is Test {
         placements = new PagePack.Placement[](count);
 
         for (uint256 i; i < count; ++i) {
-            placements[i] = PagePack.Placement(_key(from + i), from + i);
+            placements[i] = PagePack.Placement(_key(from + i), 0, from + i);
         }
     }
 
