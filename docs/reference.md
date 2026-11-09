@@ -36,18 +36,19 @@ percent more or less. Over 16 key sets, each with 494 entries packed:
 Compare unhinted costs across versions or layouts by their mean. Hinted lookups skip the search,
 so their cost barely depends on the keys.
 
-Spending from two-slot accounts under one-slot approvals, every entry packed and hinted, with the
-accounts and approvals stored three ways:
+Spending from two-slot accounts under one-slot approvals, against Solidity mappings of account
+structs and approvals, with every packed entry hinted and the pagepack entries stored three ways:
 
-| Accounts in one tx | Two maps | One map, width 2 | One map of both sizes |
-| --- | ---: | ---: | ---: |
-| 10 accounts | 93,132 | 84,315 (-9%) | 84,385 (-9%) |
-| 25 accounts | 166,002 | 171,720 (+3%) | 161,095 (-3%) |
+| Accounts in one tx | Mappings | Two maps | One map, width 2 | One map of both sizes |
+| --- | ---: | ---: | ---: | ---: |
+| 10 accounts | 256,456 | 93,132 (-64%) | 84,315 (-67%) | 84,385 (-67%) |
+| 25 accounts | 607,711 | 166,002 (-73%) | 171,720 (-72%) | 161,095 (-73%) |
 
-Two maps put accounts and approvals on pages of their own, so a spend always loads two. One map
-pinned to two slots wastes a slot per approval and holds 42 entries a page, so 25 accounts and
-their approvals spill onto a second page. One map of both sizes, with 50 entries per page, keeps
-them on one.
+A mapping keeps an account's two slots together but puts every account and approval on a page of
+its own. Two maps put accounts and approvals on pages of their own, so a spend always loads two.
+One map pinned to two slots wastes a slot per approval and holds 42 entries a page, so 25
+accounts and their approvals spill onto a second page. One map of both sizes, with 50 entries per
+page, keeps them on one.
 
 ## Storage layout
 

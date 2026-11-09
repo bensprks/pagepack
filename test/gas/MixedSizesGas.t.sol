@@ -56,6 +56,50 @@ function approvalKey(bytes32 key) pure returns (bytes32) {
     return key ^ bytes32(uint256(1));
 }
 
+/// The conventional baseline: a mapping of two-slot account structs and a mapping of approvals.
+/// An account's two slots share a page, but every account and approval is on a page of its own.
+contract Mappings is AccountsAndApprovals {
+    struct Account {
+        uint256 balance;
+        uint256 received;
+    }
+
+    struct Approval {
+        uint256 amount;
+    }
+
+    mapping(bytes32 key => Account) internal accounts;
+    mapping(bytes32 key => Approval) internal approvals;
+
+    function account(bytes32 key) internal view override returns (Entry e) {
+        Account storage a = accounts[key];
+
+        assembly ("memory-safe") {
+            e := a.slot
+        }
+    }
+
+    function approval(bytes32 key) internal view override returns (Entry e) {
+        Approval storage a = approvals[key];
+
+        assembly ("memory-safe") {
+            e := a.slot
+        }
+    }
+
+    function accountHint(bytes32) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function approvalHint(bytes32) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function pack(bytes32[] calldata, uint256[] calldata, uint256[] calldata) external override {}
+
+    function _useHints(PagePack.Hint[] calldata) internal override {}
+}
+
 /// A map per size: accounts and approvals never share a page.
 contract TwoMaps is AccountsAndApprovals {
     PagedMap internal immutable ACCOUNTS = PagePack.map("bench.accounts", 2);
@@ -154,16 +198,19 @@ contract OneMap is AccountsAndApprovals {
 /// Measures spending from N accounts under their approvals in one transaction, with every entry
 /// packed and hinted. Each test is its own transaction, so every page starts cold.
 ///
+/// - Mappings: Solidity mappings, the baseline. Every account and approval is on its own page.
 /// - Two maps: accounts and approvals each fill pages of their own.
 /// - One map, width 2: approvals pinned to the accounts' width, 42 entries per page.
 /// - One map of both sizes: a one-slot map with 50 tags per page, so 25 accounts and their 25
 ///   approvals share a page.
 contract MixedSizesGasTest is Test {
+    Mappings internal mappings;
     TwoMaps internal twoMaps;
     OneMap internal pinned;
     OneMap internal mixed;
 
     function setUp() public {
+        mappings = new Mappings();
         twoMaps = new TwoMaps();
         pinned = new OneMap("bench.pinned", 2, 42, 2);
         mixed = new OneMap("bench.mixed", 1, 50, 1);
@@ -179,6 +226,7 @@ contract MixedSizesGasTest is Test {
             approvalAt[i] = 2 * i + 1;
         }
 
+        mappings.seed(keys);
         twoMaps.seed(keys);
         pinned.seed(keys);
         mixed.seed(keys);
@@ -189,12 +237,14 @@ contract MixedSizesGasTest is Test {
     }
 
     function test_gas_spend_10() public {
+        _spend(mappings, "mixed-mappings", 10);
         _spend(twoMaps, "mixed-two-maps", 10);
         _spend(pinned, "mixed-pinned", 10);
         _spend(mixed, "mixed-sizes", 10);
     }
 
     function test_gas_spend_25() public {
+        _spend(mappings, "mixed-mappings", 25);
         _spend(twoMaps, "mixed-two-maps", 25);
         _spend(pinned, "mixed-pinned", 25);
         _spend(mixed, "mixed-sizes", 25);
@@ -202,9 +252,11 @@ contract MixedSizesGasTest is Test {
 
     function _spend(AccountsAndApprovals target, string memory group, uint256 count) internal {
         bytes32[] memory keys = _keys(count);
-        PagePack.Hint[] memory hints = new PagePack.Hint[](2 * count);
 
-        for (uint256 i; i < count; ++i) {
+        // Mappings take no hints.
+        PagePack.Hint[] memory hints = new PagePack.Hint[](target == mappings ? 0 : 2 * count);
+
+        for (uint256 i; i < hints.length / 2; ++i) {
             hints[i] = PagePack.Hint(keys[i], target.accountHint(keys[i]));
             hints[count + i] = PagePack.Hint(approvalKey(keys[i]), target.approvalHint(keys[i]));
         }

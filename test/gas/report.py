@@ -79,6 +79,7 @@ TABLES = [
         "title": "Library: spending from two-slot accounts under one-slot approvals, hinted",
         "label": "Accounts in one transaction",
         "columns": [
+            ("Mappings", "mixed-mappings"),
             ("Two maps", "mixed-two-maps"),
             ("One map, width 2", "mixed-pinned"),
             ("One map of both sizes", "mixed-sizes"),
