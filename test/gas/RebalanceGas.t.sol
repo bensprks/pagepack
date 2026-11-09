@@ -106,3 +106,86 @@ contract CompactionGasTest is Test {
         return keccak256(abi.encode("compaction", i));
     }
 }
+
+/// Measures packing a two-slot entry onto a page of 64 one-slot entries after 32 of them leave
+/// it, either two by two, which leaves gaps that fit, or every other one, which leaves none: the
+/// 32 entries staying slide together first. Each measured call runs on cold storage.
+contract NarrowCompactionGasTest is Test {
+    bytes32 internal constant WIDE = keccak256("compaction.wide");
+
+    EntryStore internal store;
+    bytes32[] internal keys;
+    mapping(uint256 fingerprint => bool) internal seen;
+
+    function setUp() public {
+        store = new EntryStore(1, 0, false);
+
+        // Keys must have distinct fingerprints to be packed together.
+        seen[store.fingerprintOfSized(WIDE, 2)] = true;
+
+        for (uint256 i; keys.length < 64; ++i) {
+            bytes32 key = keccak256(abi.encode("compaction.narrow", i));
+            uint256 fingerprint = store.fingerprintOf(key);
+            if (seen[fingerprint]) continue;
+
+            seen[fingerprint] = true;
+            keys.push(key);
+        }
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](64);
+
+        for (uint256 i; i < 64; ++i) {
+            store.set(keys[i], 0, 1);
+            placements[i] = PagePack.Placement(keys[i], 0, i);
+        }
+
+        store.rebalance(placements);
+
+        store.setSized(WIDE, 2, 0, 1);
+        store.setSized(WIDE, 2, 1, 1);
+    }
+
+    function test_gas_packIntoGap() public {
+        _evict(1);
+        _packWide();
+        vm.snapshotGasLastCall("pagepack-rebalance", "Pack a 2-slot entry into a gap");
+
+        assertEq(store.hintOfSized(WIDE, 2), (2 << 11) | 1);
+        assertEq(store.slotOfSized(WIDE, 2) & 127, 64);
+        assertEq(store.slotOf(keys[2]) & 127, 66);
+    }
+
+    /// Every entry that stays sits one slot from the next, so all 32 move.
+    function test_gas_packByCompacting() public {
+        _evict(2);
+        _packWide();
+        vm.snapshotGasLastCall("pagepack-rebalance", "Pack a 2-slot entry, moving 32 entries");
+
+        assertEq(store.hintOfSized(WIDE, 2), (2 << 11) | 1);
+        assertEq(store.slotOfSized(WIDE, 2) & 127, 96);
+        assertEq(store.slotOf(keys[1]) & 127, 64);
+        assertEq(store.slotOf(keys[63]) & 127, 95);
+        assertEq(store.get(keys[63], 0), 1);
+    }
+
+    /// Evicts entries 4j and 4j + `step`, for the 16 values of j: 32 in all.
+    function _evict(uint256 step) internal {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](32);
+
+        for (uint256 j; j < 16; ++j) {
+            placements[2 * j] = PagePack.Placement(keys[4 * j], 0, PagePack.HOME);
+            placements[2 * j + 1] = PagePack.Placement(keys[4 * j + step], 0, PagePack.HOME);
+        }
+
+        store.rebalance(placements);
+    }
+
+    function _packWide() internal {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](1);
+        placements[0] = PagePack.Placement(WIDE, 2, 0);
+
+        // The setup above warmed the pages. Measure in a fresh transaction.
+        vm.cool(address(store));
+        store.rebalance(placements);
+    }
+}
