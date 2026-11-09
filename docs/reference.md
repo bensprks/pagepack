@@ -237,9 +237,9 @@ Filling a map of 1,016 one-slot entries takes about 58M gas, so split large migr
 transactions sized from the table above. Listing new entries in fingerprint order also skips a
 sort. After that, a rebalance costs what it changes. Swapping two entries on a page costs about
 62,000 gas at any size, since only their tags move. Moving an entry to another page also reads
-that page's tags. Packing or evicting rebuilds the directory once per call, which grows with the
-number of packed entries. Evicting also pays 17,000 gas for the entry's home slot in a default
-map:
+that page's tags, about 200 gas each: 13,000 for a page of 64. Packing or evicting rebuilds the
+directory once per call, which grows with the number of packed entries. Evicting also pays
+17,000 gas for the entry's home slot in a default map:
 
 | Operation (one-slot entries, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
 | --- | ---: | ---: | ---: |
@@ -250,13 +250,17 @@ map:
 | Replace one entry with another | 141,003 | 207,602 | 268,249 |
 | Resubmit the whole layout | 187,179 | 1,333,427 | 2,626,743 |
 
-Sliding entries together costs about 2,000 gas per slot moved, and only the call that needs it
-pays. On a full page of a one-slot map, with two one-slot gaps apart:
+Sliding entries together costs about 7,000 gas for each entry moved, plus about 2,000 for each
+of its slots after the first, and only the call that needs it pays. So a page of many small
+entries costs more to compact than a page of a few wide ones. On a full page of a one-slot map,
+after some of its entries left:
 
-| Operation | Gas |
-| --- | ---: |
-| Pack a 1-slot entry into a gap | 116,120 |
-| Pack a 2-slot entry, moving 62 slots | 254,432 |
+| Page before the call | Operation | Gas |
+| --- | --- | ---: |
+| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 116,120 |
+| | Pack a 2-slot entry, moving 62 slots | 254,432 |
+| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 162,028 |
+| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 386,544 |
 
 ### Why entries don't pack themselves
 

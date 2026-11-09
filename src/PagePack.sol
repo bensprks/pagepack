@@ -537,7 +537,7 @@ library PagePack {
     ///
     ///      Packing an entry from home costs about 62,000 gas, mostly MIP-8's charge for two new
     ///      slots, so split large layouts across transactions. Each page that receives entries
-    ///      also has its tags read once, up to 100 gas per index. The sort of newly packed
+    ///      also has its tags read once, about 200 gas per index. The sort of newly packed
     ///      entries returns early if the caller lists them in fingerprint order
     ///      ({fingerprintOf}).
     ///
