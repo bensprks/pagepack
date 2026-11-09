@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack} from "pagepack/PagePack.sol";
-import {EntryStore} from "../utils/EntryStore.sol";
+import {EntryStore, KindedEntryStore} from "../utils/EntryStore.sol";
 
 /// Measures rebalancing moves. Each test is its own transaction, so every page starts cold.
 contract RebalanceGasTest is Test {
@@ -37,7 +37,7 @@ contract RebalanceGasTest is Test {
 
     function _place(uint256 index) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(KEY, 0, index);
+        placements[0] = PagePack.Placement(KEY, index);
 
         store.rebalance(placements);
     }
@@ -46,33 +46,38 @@ contract RebalanceGasTest is Test {
 /// Measures packing onto a full page of mixed sizes after two one-slot entries leave it, so its
 /// two free slots are apart. Each test is its own transaction, so every page starts cold.
 contract CompactionGasTest is Test {
-    EntryStore internal store;
+    KindedEntryStore internal store;
+
+    // The kind of each key: kinds 0 to 3 are 1, 30, 32 and 2 slots.
+    uint256[6] internal kinds = [uint256(0), 1, 0, 2, 0, 3];
 
     function setUp() public {
-        store = new EntryStore(1, 0, false);
+        // 64 tags and 64 data slots per page, as in a one-slot map.
+        uint256[] memory sizes = new uint256[](4);
+        (sizes[0], sizes[1], sizes[2], sizes[3]) = (1, 30, 32, 2);
+        store = new KindedEntryStore(sizes, 64, false);
 
         // 1 + 30 + 1 + 32 slots fill the page's 64 data slots, in that order.
-        uint256[4] memory sizes = [uint256(1), 30, 1, 32];
         PagePack.Placement[] memory placements = new PagePack.Placement[](4);
 
         for (uint256 i; i < 4; ++i) {
-            _fill(_key(i), sizes[i]);
-            placements[i] = PagePack.Placement(_key(i), sizes[i], i);
+            _fill(_key(i));
+            placements[i] = PagePack.Placement(_key(i), i);
         }
 
         store.rebalance(placements);
 
         placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(_key(0), 1, PagePack.HOME);
-        placements[1] = PagePack.Placement(_key(2), 1, PagePack.HOME);
+        placements[0] = PagePack.Placement(_key(0), PagePack.HOME);
+        placements[1] = PagePack.Placement(_key(2), PagePack.HOME);
         store.rebalance(placements);
 
-        _fill(_key(4), 1);
-        _fill(_key(5), 2);
+        _fill(_key(4));
+        _fill(_key(5));
     }
 
     function test_gas_packIntoGap() public {
-        store.rebalance(_place(_key(4), 1));
+        store.rebalance(_place(_key(4)));
         vm.snapshotGasLastCall("pagepack-rebalance", "Pack a 1-slot entry into a gap");
 
         assertEq(store.hintOf(_key(4)), 5);
@@ -80,30 +85,28 @@ contract CompactionGasTest is Test {
 
     /// No gap fits two slots, so the 30- and 32-slot entries slide together first.
     function test_gas_packByCompacting() public {
-        store.rebalance(_place(_key(5), 2));
+        store.rebalance(_place(_key(5)));
         vm.snapshotGasLastCall("pagepack-rebalance", "Pack a 2-slot entry, moving 62 slots");
 
-        assertEq(store.hintOfSized(_key(5), 2), (2 << 11) | 5);
-        assertEq(store.get(_key(3), 32, 31, 0), 1);
+        assertEq(store.hintOf(_key(5)), 5);
+        assertEq(store.get(_key(3), 31), 1);
     }
 
-    function _fill(bytes32 key, uint256 slots) internal {
+    function _fill(bytes32 key) internal {
+        uint256 slots = store.sizeOf(key);
+
         for (uint256 i; i < slots; ++i) {
-            store.setSized(key, slots, i, 1);
+            store.set(key, i, 1);
         }
     }
 
-    function _place(bytes32 key, uint256 slots)
-        internal
-        pure
-        returns (PagePack.Placement[] memory placements)
-    {
+    function _place(bytes32 key) internal pure returns (PagePack.Placement[] memory placements) {
         placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, slots, 4);
+        placements[0] = PagePack.Placement(key, 4);
     }
 
-    function _key(uint256 i) internal pure returns (bytes32) {
-        return keccak256(abi.encode("compaction", i));
+    function _key(uint256 i) internal view returns (bytes32) {
+        return bytes32((kinds[i] << 248) | (uint256(keccak256(abi.encode("compaction", i))) >> 8));
     }
 }
 
@@ -111,20 +114,25 @@ contract CompactionGasTest is Test {
 /// it, either two by two, which leaves gaps that fit, or every other one, which leaves none: the
 /// 32 entries staying slide together first. Each measured call runs on cold storage.
 contract NarrowCompactionGasTest is Test {
-    bytes32 internal constant WIDE = keccak256("compaction.wide");
+    // Kind 1, two slots.
+    bytes32 internal constant WIDE = bytes32((uint256(1) << 248) | 1);
 
-    EntryStore internal store;
+    KindedEntryStore internal store;
     bytes32[] internal keys;
     mapping(uint256 fingerprint => bool) internal seen;
 
     function setUp() public {
-        store = new EntryStore(1, 0, false);
+        // Kinds of one and two slots, on pages of 64 tags and 64 data slots.
+        uint256[] memory sizes = new uint256[](2);
+        (sizes[0], sizes[1]) = (1, 2);
+        store = new KindedEntryStore(sizes, 64, false);
 
         // Keys must have distinct fingerprints to be packed together.
-        seen[store.fingerprintOfSized(WIDE, 2)] = true;
+        seen[store.fingerprintOf(WIDE)] = true;
 
         for (uint256 i; keys.length < 64; ++i) {
-            bytes32 key = keccak256(abi.encode("compaction.narrow", i));
+            // Kind 0, one slot.
+            bytes32 key = bytes32(uint256(keccak256(abi.encode("compaction.narrow", i))) >> 8);
             uint256 fingerprint = store.fingerprintOf(key);
             if (seen[fingerprint]) continue;
 
@@ -136,13 +144,13 @@ contract NarrowCompactionGasTest is Test {
 
         for (uint256 i; i < 64; ++i) {
             store.set(keys[i], 0, 1);
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
 
         store.rebalance(placements);
 
-        store.setSized(WIDE, 2, 0, 1);
-        store.setSized(WIDE, 2, 1, 1);
+        store.set(WIDE, 0, 1);
+        store.set(WIDE, 1, 1);
     }
 
     function test_gas_packIntoGap() public {
@@ -150,8 +158,8 @@ contract NarrowCompactionGasTest is Test {
         _packWide();
         vm.snapshotGasLastCall("pagepack-rebalance", "Pack a 2-slot entry into a gap");
 
-        assertEq(store.hintOfSized(WIDE, 2), (2 << 11) | 1);
-        assertEq(store.slotOfSized(WIDE, 2) & 127, 64);
+        assertEq(store.hintOf(WIDE), 1);
+        assertEq(store.slotOf(WIDE) & 127, 64);
         assertEq(store.slotOf(keys[2]) & 127, 66);
     }
 
@@ -161,8 +169,8 @@ contract NarrowCompactionGasTest is Test {
         _packWide();
         vm.snapshotGasLastCall("pagepack-rebalance", "Pack a 2-slot entry, moving 32 entries");
 
-        assertEq(store.hintOfSized(WIDE, 2), (2 << 11) | 1);
-        assertEq(store.slotOfSized(WIDE, 2) & 127, 96);
+        assertEq(store.hintOf(WIDE), 1);
+        assertEq(store.slotOf(WIDE) & 127, 96);
         assertEq(store.slotOf(keys[1]) & 127, 64);
         assertEq(store.slotOf(keys[63]) & 127, 95);
         assertEq(store.get(keys[63], 0), 1);
@@ -173,8 +181,8 @@ contract NarrowCompactionGasTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](32);
 
         for (uint256 j; j < 16; ++j) {
-            placements[2 * j] = PagePack.Placement(keys[4 * j], 0, PagePack.HOME);
-            placements[2 * j + 1] = PagePack.Placement(keys[4 * j + step], 0, PagePack.HOME);
+            placements[2 * j] = PagePack.Placement(keys[4 * j], PagePack.HOME);
+            placements[2 * j + 1] = PagePack.Placement(keys[4 * j + step], PagePack.HOME);
         }
 
         store.rebalance(placements);
@@ -182,7 +190,7 @@ contract NarrowCompactionGasTest is Test {
 
     function _packWide() internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(WIDE, 2, 0);
+        placements[0] = PagePack.Placement(WIDE, 0);
 
         // The setup above warmed the pages. Measure in a fresh transaction.
         vm.cool(address(store));

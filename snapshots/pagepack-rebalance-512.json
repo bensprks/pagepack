@@ -1,9 +1,9 @@
 {
-  "Empty rebalance": "22075",
-  "Evict one entry": "152651",
-  "Move one entry": "112306",
-  "Pack every entry": "29248005",
-  "Replace one entry with another": "207602",
-  "Resubmit the whole layout": "1333427",
-  "Swap two entries": "61919"
+  "Empty rebalance": "22006",
+  "Evict one entry": "157469",
+  "Move one entry": "112533",
+  "Pack every entry": "29148035",
+  "Replace one entry with another": "200784",
+  "Resubmit the whole layout": "1227057",
+  "Swap two entries": "61939"
 }

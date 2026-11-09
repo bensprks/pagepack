@@ -15,6 +15,15 @@ abstract contract AccountsAndApprovals {
 
     function approvalHint(bytes32 key) external view virtual returns (uint256);
 
+    /// The keys an account and its approval are stored under, for building hints.
+    function accountKeyOf(bytes32 key) public pure virtual returns (bytes32) {
+        return key;
+    }
+
+    function approvalKeyOf(bytes32 key) public pure virtual returns (bytes32) {
+        return approvalKey(key);
+    }
+
     /// Packs account i at `accountAt[i]` and its approval at `approvalAt[i]`.
     function pack(
         bytes32[] calldata keys,
@@ -130,8 +139,8 @@ contract TwoMaps is AccountsAndApprovals {
         PagePack.Placement[] memory approvals = new PagePack.Placement[](keys.length);
 
         for (uint256 i; i < keys.length; ++i) {
-            accounts[i] = PagePack.Placement(keys[i], 0, accountAt[i]);
-            approvals[i] = PagePack.Placement(approvalKey(keys[i]), 0, approvalAt[i]);
+            accounts[i] = PagePack.Placement(keys[i], accountAt[i]);
+            approvals[i] = PagePack.Placement(approvalKey(keys[i]), approvalAt[i]);
         }
 
         ACCOUNTS.rebalance(accounts);
@@ -145,33 +154,24 @@ contract TwoMaps is AccountsAndApprovals {
     }
 }
 
-/// One map, `slots` wide, looked up at `accountSlots` for accounts and `approvalSlots` for
-/// approvals.
-contract OneMap is AccountsAndApprovals {
-    PagedMap internal immutable MAP;
-    uint256 internal immutable ACCOUNT_SLOTS;
-    uint256 internal immutable APPROVAL_SLOTS;
-
-    constructor(string memory name, uint256 slots, uint256 perPage, uint256 approvalSlots) {
-        MAP = PagePack.map(name, slots, perPage);
-        ACCOUNT_SLOTS = 2;
-        APPROVAL_SLOTS = approvalSlots;
-    }
+/// One map pinned to the accounts' two slots, so each approval leaves a slot unused.
+contract PinnedMap is AccountsAndApprovals {
+    PagedMap internal immutable MAP = PagePack.map("bench.pinned", 2);
 
     function account(bytes32 key) internal view override returns (Entry) {
-        return MAP.sized(ACCOUNT_SLOTS).find(key);
+        return MAP.find(key);
     }
 
     function approval(bytes32 key) internal view override returns (Entry) {
-        return MAP.sized(APPROVAL_SLOTS).find(approvalKey(key));
+        return MAP.find(approvalKey(key));
     }
 
     function accountHint(bytes32 key) external view override returns (uint256) {
-        return MAP.sized(ACCOUNT_SLOTS).hintOf(key);
+        return MAP.hintOf(key);
     }
 
     function approvalHint(bytes32 key) external view override returns (uint256) {
-        return MAP.sized(APPROVAL_SLOTS).hintOf(approvalKey(key));
+        return MAP.hintOf(approvalKey(key));
     }
 
     function pack(
@@ -182,9 +182,61 @@ contract OneMap is AccountsAndApprovals {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2 * keys.length);
 
         for (uint256 i; i < keys.length; ++i) {
-            placements[2 * i] = PagePack.Placement(keys[i], ACCOUNT_SLOTS, accountAt[i]);
-            placements[2 * i + 1] =
-                PagePack.Placement(approvalKey(keys[i]), APPROVAL_SLOTS, approvalAt[i]);
+            placements[2 * i] = PagePack.Placement(keys[i], accountAt[i]);
+            placements[2 * i + 1] = PagePack.Placement(approvalKey(keys[i]), approvalAt[i]);
+        }
+
+        MAP.rebalance(placements);
+    }
+
+    function _useHints(PagePack.Hint[] calldata hints) internal override {
+        MAP.useHints(hints);
+    }
+}
+
+/// One map of two kinds, one-slot approvals and two-slot accounts. Each key holds its kind in
+/// the top byte, over the first 31 bytes of the benchmark's key.
+contract KindedMap is AccountsAndApprovals {
+    uint256 internal constant APPROVAL = 0;
+    uint256 internal constant ACCOUNT = 1;
+
+    PagedMap internal immutable MAP =
+        PagePack.mapOfKinds("bench.mixed").withKind(APPROVAL, 1).withKind(ACCOUNT, 2).build();
+
+    function accountKeyOf(bytes32 key) public pure override returns (bytes32) {
+        return PagePack.hashedKindKey(ACCOUNT, key);
+    }
+
+    function approvalKeyOf(bytes32 key) public pure override returns (bytes32) {
+        return PagePack.hashedKindKey(APPROVAL, key);
+    }
+
+    function account(bytes32 key) internal view override returns (Entry) {
+        return MAP.find(accountKeyOf(key));
+    }
+
+    function approval(bytes32 key) internal view override returns (Entry) {
+        return MAP.find(approvalKeyOf(key));
+    }
+
+    function accountHint(bytes32 key) external view override returns (uint256) {
+        return MAP.hintOf(accountKeyOf(key));
+    }
+
+    function approvalHint(bytes32 key) external view override returns (uint256) {
+        return MAP.hintOf(approvalKeyOf(key));
+    }
+
+    function pack(
+        bytes32[] calldata keys,
+        uint256[] calldata accountAt,
+        uint256[] calldata approvalAt
+    ) external override {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2 * keys.length);
+
+        for (uint256 i; i < keys.length; ++i) {
+            placements[2 * i] = PagePack.Placement(accountKeyOf(keys[i]), accountAt[i]);
+            placements[2 * i + 1] = PagePack.Placement(approvalKeyOf(keys[i]), approvalAt[i]);
         }
 
         MAP.rebalance(placements);
@@ -201,19 +253,19 @@ contract OneMap is AccountsAndApprovals {
 /// - Mappings: Solidity mappings, the baseline. Every account and approval is on its own page.
 /// - Two maps: accounts and approvals each fill pages of their own.
 /// - One map, width 2: approvals pinned to the accounts' width, 42 entries per page.
-/// - One map of both sizes: a one-slot map with 50 tags per page, so 25 accounts and their 25
-///   approvals share a page.
+/// - One map of both sizes: a map of two kinds with 50 tags per page, so 25 accounts and their
+///   25 approvals share a page.
 contract MixedSizesGasTest is Test {
     Mappings internal mappings;
     TwoMaps internal twoMaps;
-    OneMap internal pinned;
-    OneMap internal mixed;
+    PinnedMap internal pinned;
+    KindedMap internal mixed;
 
     function setUp() public {
         mappings = new Mappings();
         twoMaps = new TwoMaps();
-        pinned = new OneMap("bench.pinned", 2, 42, 2);
-        mixed = new OneMap("bench.mixed", 1, 50, 1);
+        pinned = new PinnedMap();
+        mixed = new KindedMap();
 
         bytes32[] memory keys = _keys(25);
         uint256[] memory separate = new uint256[](25);
@@ -257,8 +309,9 @@ contract MixedSizesGasTest is Test {
         PagePack.Hint[] memory hints = new PagePack.Hint[](target == mappings ? 0 : 2 * count);
 
         for (uint256 i; i < hints.length / 2; ++i) {
-            hints[i] = PagePack.Hint(keys[i], target.accountHint(keys[i]));
-            hints[count + i] = PagePack.Hint(approvalKey(keys[i]), target.approvalHint(keys[i]));
+            hints[i] = PagePack.Hint(target.accountKeyOf(keys[i]), target.accountHint(keys[i]));
+            hints[count + i] =
+                PagePack.Hint(target.approvalKeyOf(keys[i]), target.approvalHint(keys[i]));
         }
 
         // Reading hints above warmed the pages. Measure in a fresh transaction.

@@ -41,12 +41,12 @@ Updating existing one-slot balances in one transaction, from `make gas` on Monad
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,071 (+28%) | 34,846 (+4%) |
-| 2 entries | 45,321 | 45,997 (+1%) | 36,485 (-19%) |
-| 10 entries | 139,537 | 67,739 (-51%) | 49,705 (-64%) |
-| 30 entries | 375,029 | 127,596 (-66%) | 82,677 (-78%) |
-| 64 entries, a full page | 775,423 | 227,992 (-71%) | 138,787 (-82%) |
-| 2 unpacked entries | 45,309 | 57,126 (+26%) | – |
+| 1 entry | 33,556 | 43,053 (+28%) | 34,845 (+4%) |
+| 2 entries | 45,321 | 45,372 (+0%) | 36,461 (-20%) |
+| 10 entries | 139,537 | 65,758 (-53%) | 49,497 (-65%) |
+| 30 entries | 375,029 | 118,148 (-68%) | 82,009 (-78%) |
+| 64 entries, a full page | 775,423 | 207,884 (-73%) | 137,337 (-82%) |
+| 2 unpacked entries | 45,309 | 56,532 (+25%) | – |
 
 A page holds 64 one-slot entries, not 128, because each packed entry also has a one-slot tag on
 the page. Entries that aren't packed cost more than in a regular mapping, because the lookup
@@ -108,8 +108,8 @@ its positions, in one map with a getter per kind. The exchange's
 [`ExchangeMap.sol`](examples/exchange/ExchangeMap.sol) does this for four kinds of one-slot
 entry. Kinds of different sizes can share a map too:
 [`AccountMap.sol`](examples/accounts/AccountMap.sol) keeps two-slot accounts and one-slot
-approvals on the same pages, and each getter looks its kind up at its struct's size with
-`sized`. To work with raw slots instead of structs, see
+approvals on the same pages. Its map lists each kind's size, and the top byte of a key names its
+kind, so nothing ever passes a size. To work with raw slots instead of structs, see
 [using `PagedMap` directly](docs/reference.md#using-pagedmap-directly).
 
 ### Setup
@@ -146,10 +146,10 @@ gas but never returns the wrong entry.
 them with the transaction, and the contract loads them once with `useHints`. Maps made with
 `mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 
-**Rebalancing** takes a list of placements, each an entry, its size and its new index, or `HOME`
-to send it back. It applies them all at once, so two entries can swap indices, and picks where on
+**Rebalancing** takes a list of placements, each an entry's key and its new index, or `HOME` to
+send it back. It applies them all at once, so two entries can swap indices, and picks where on
 the page each entry's data goes. Packing a one-slot entry costs about 62,000 gas. Swapping two
-packed entries costs about 62,000. pagepack has no access control: your contract decides who
+packed entries costs about 61,000. pagepack has no access control: your contract decides who
 rebalances. New entries always start on their home pages. Only `rebalance` packs them.
 
 The [reference](docs/reference.md) covers the storage layout, each step's cost, and planning
@@ -162,14 +162,19 @@ A struct from `find` is a raw storage pointer:
 - **Fixed-size fields only.** Mappings, dynamic arrays, strings and bytes live at slots derived
   from the entry's location, so a move leaves them behind.
 - **Fit the size.** The slot after a packed entry may hold another entry's data, so a struct must
-  fit the size it was looked up at. A map of one kind takes its width from the struct. A map of
-  several kinds looks each up with `sized(slots)` at its struct's size, or pins one width and
-  checks each struct with `requireFits`.
-- **Cast or bit-pack keys.** pagepack already hashes the key, so don't hash keys that fit in 32
-  bytes. In a map of several kinds, include the kind in the key so keys of different kinds can't
+  fit its entry. A map of one kind takes its width from the struct. A map of kinds of different
+  sizes, made with `mapOfKinds`, takes each kind's size from its struct. A map that pins one
+  width for several structs checks each with `requireFits`.
+- **Cast or bit-pack keys.** pagepack already hashes the key, so don't hash keys that fit. In a
+  map of several kinds, put the kind in the key's top byte so keys of different kinds can't
   collide.
-- **Keep the schema fixed.** A map's name, width, entries per page and home-hint mode, and each
-  kind's struct size, are part of every entry's identity. Changing one after deployment leaves
+- **Never take a key's kind from input.** A map made with `mapOfKinds` reads an entry's size
+  from the key's top byte. If a caller can set that byte, they reach another kind's entry, and
+  a wider struct written through it overwrites the entries next to it. Build keys with
+  `kindKey(kind, value)`, which reverts unless the value fits the 31 bytes below, or
+  `hashedKindKey(kind, hash)` for longer keys.
+- **Keep the schema fixed.** A map's name, its kinds' sizes, entries per page and home-hint mode
+  are part of every entry's identity. Changing one, or adding a kind, after deployment leaves
   existing entries unreachable, so version the map's name and migrate instead. See
   [storage schema](docs/reference.md#storage-schema).
 - **Look entries up again after any rebalance**, even one that doesn't name them: making room on
@@ -177,10 +182,21 @@ A struct from `find` is a raw storage pointer:
   callback could reach your rebalance function, guard it and the functions holding entries with
   one lock.
 
+## Limits
+
+- A map packs up to 1,016 entries. The rest stay at home, a page each.
+- An entry is 1 to 127 slots of fixed-size fields.
+- A page holds up to 64 entries, and fewer when they are wider than a slot.
+- A map of several kinds lists up to 8, numbered 0 to 7. Kinds of the same size can share a
+  number. Its keys are 31 bytes under the kind.
+- A map's kinds, sizes and entries per page are fixed once it holds data.
+
+The [reference](docs/reference.md#limits) has the full table and the margins behind it.
+
 ## Upgrades
 
-Proxies aren't supported yet. A map's name, home-hint mode, width, entries per page, entry sizes
-and key encoding determine where its entries are stored, so they can't change after entries are
+Proxies aren't supported yet. A map's name, home-hint mode, kinds' sizes, entries per page and
+key encoding determine where its entries are stored, so they can't change after entries are
 written. pagepack's own storage format may change before 1.0. A future version may support
 upgrades using maps with a fixed width set in advance, leaving room for structs to grow.
 

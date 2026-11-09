@@ -44,7 +44,7 @@ contract KeySetsGasTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](PACKED);
         for (uint256 i; i < PACKED; ++i) {
             uint256 index = i < 64 ? i : FILLER_START + i - 64;
-            placements[i] = PagePack.Placement(_key(salt, i), 0, index);
+            placements[i] = PagePack.Placement(_key(salt, i), index);
         }
 
         try store.pack(placements) {}

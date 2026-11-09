@@ -100,7 +100,7 @@ contract PackingGasTest is Test {
         placements = new PagePack.Placement[](count);
 
         for (uint256 i; i < count; ++i) {
-            placements[i] = PagePack.Placement(_key(from + i), 0, from + i);
+            placements[i] = PagePack.Placement(_key(from + i), from + i);
         }
     }
 

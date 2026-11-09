@@ -393,7 +393,7 @@ contract PackedExchangeTest is ExchangeTest {
     function _pack(bytes32[] memory keys) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
 
         vm.prank(admin);
@@ -407,7 +407,7 @@ contract PackedExchangeTest is ExchangeTest {
     {
         placements = new PagePack.Placement[](keys.length);
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, PagePack.HOME);
+            placements[i] = PagePack.Placement(keys[i], PagePack.HOME);
         }
     }
 

@@ -3,12 +3,12 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack, PagedMap} from "pagepack/PagePack.sol";
-import {EntryStore, SizedEntryStore} from "./utils/EntryStore.sol";
+import {EntryStore, EntryStoreBase, KindedEntryStore} from "./utils/EntryStore.sol";
 
 /// Loads hints in one call to the store and looks an entry up in another, as a contract would
 /// within one transaction.
 contract HintedCaller {
-    function loadThenFind(EntryStore store, PagePack.Hint[] calldata hints, bytes32 key)
+    function loadThenFind(EntryStoreBase store, PagePack.Hint[] calldata hints, bytes32 key)
         external
         returns (uint256)
     {
@@ -20,12 +20,46 @@ contract HintedCaller {
 /// Creates maps in an external call, so a test can expect the revert.
 contract MapFactory {
     function map(uint256 slots, uint256 perPage) external pure returns (PagedMap) {
-        return PagePack.map("pagepack.factory", slots, perPage);
+        return PagePack.map("pagepack.factory", slots).withEntriesPerPage(perPage);
+    }
+
+    /// A map of kinds: kind 0 of one slot, and `kind` of `slots`.
+    function kinds(uint256 kind, uint256 slots) external pure returns (PagedMap) {
+        return PagePack.mapOfKinds("pagepack.factory").withKind(0, 1).withKind(kind, slots).build();
+    }
+
+    /// The same, with entries per page set by hand.
+    function kinds(uint256 kind, uint256 slots, uint256 perPage) external pure returns (PagedMap) {
+        return PagePack.mapOfKinds("pagepack.factory")
+            .withKind(0, 1)
+            .withKind(kind, slots)
+            .build()
+            .withEntriesPerPage(perPage);
+    }
+
+    function noKinds() external pure returns (PagedMap) {
+        return PagePack.mapOfKinds("pagepack.factory").build();
+    }
+
+    function requireFits(uint256 kind, uint256 slots) external pure {
+        PagePack.mapOfKinds("pagepack.factory")
+            .withKind(0, 1)
+            .withKind(1, 2)
+            .build()
+            .requireFits(kind, slots);
+    }
+
+    function kindKey(uint256 kind, uint256 value) external pure returns (bytes32) {
+        return PagePack.kindKey(kind, value);
+    }
+
+    function hashedKindKey(uint256 kind, bytes32 hash) external pure returns (bytes32) {
+        return PagePack.hashedKindKey(kind, hash);
     }
 }
 
 contract PagePackTest is Test {
-    EntryStore internal store;
+    EntryStoreBase internal store;
 
     mapping(uint256 fingerprint => uint256 keyPlusOne) internal seen;
 
@@ -158,8 +192,8 @@ contract PagePackTest is Test {
         uint256 hintedMap = uint256(PagedMap.unwrap(hinted.MAP()));
 
         // Same name and width; only the mode bit differs, which moves every slot.
-        assertEq(plainMap & 0x7f, 3);
-        assertEq(hintedMap & 0x7f, 3);
+        assertEq((plainMap >> 16) & 0xff, 3);
+        assertEq((hintedMap >> 16) & 0xff, 3);
         assertEq(plainMap ^ hintedMap, 0x80);
         assertEq(plain.entriesPerPage(), hinted.entriesPerPage());
     }
@@ -306,7 +340,7 @@ contract PagePackTest is Test {
 
         for (uint256 i; i < 3; ++i) {
             _fill(_key(i), 10 * i);
-            placements[i] = PagePack.Placement(_key(i), 0, i * 5);
+            placements[i] = PagePack.Placement(_key(i), i * 5);
         }
 
         store.rebalance(placements);
@@ -344,8 +378,8 @@ contract PagePackTest is Test {
         _pack(b, 1);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(a, 0, 1);
-        placements[1] = PagePack.Placement(b, 0, 0);
+        placements[0] = PagePack.Placement(a, 1);
+        placements[1] = PagePack.Placement(b, 0);
         store.rebalance(placements);
 
         assertEq(store.hintOf(a), 2);
@@ -367,8 +401,8 @@ contract PagePackTest is Test {
         _pack(b, 1);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(c, 0, 1);
-        placements[1] = PagePack.Placement(b, 0, 0);
+        placements[0] = PagePack.Placement(c, 1);
+        placements[1] = PagePack.Placement(b, 0);
         store.rebalance(_join(_eviction(a), placements));
 
         assertEq(store.hintOf(a), 0);
@@ -389,8 +423,8 @@ contract PagePackTest is Test {
 
         // b is listed first but takes the index a only leaves later in the list.
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(b, 0, 0);
-        placements[1] = PagePack.Placement(a, 0, 5);
+        placements[0] = PagePack.Placement(b, 0);
+        placements[1] = PagePack.Placement(a, 5);
         store.rebalance(placements);
 
         assertEq(store.hintOf(a), 6);
@@ -415,7 +449,7 @@ contract PagePackTest is Test {
 
         for (uint256 i; i < 3; ++i) {
             _fill(_key(i), 10 * i);
-            placements[i] = PagePack.Placement(_key(i), 0, i * 5);
+            placements[i] = PagePack.Placement(_key(i), i * 5);
         }
 
         store.rebalance(placements);
@@ -460,8 +494,8 @@ contract PagePackTest is Test {
 
     function test_revertsWhenTwoPlacementsShareIndex() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(_key(1), 0, 3);
-        placements[1] = PagePack.Placement(_key(2), 0, 3);
+        placements[0] = PagePack.Placement(_key(1), 3);
+        placements[1] = PagePack.Placement(_key(2), 3);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.IndexTaken.selector, 3));
         store.rebalance(placements);
@@ -481,8 +515,8 @@ contract PagePackTest is Test {
 
     function test_revertsWhenSameKeyPlacedTwice() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(_key(1), 0, 0);
-        placements[1] = PagePack.Placement(_key(1), 0, 1);
+        placements[0] = PagePack.Placement(_key(1), 0);
+        placements[1] = PagePack.Placement(_key(1), 1);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.DuplicateKey.selector, _key(1)));
         store.rebalance(placements);
@@ -536,7 +570,7 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](perPage * 2);
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(_key(i), 0, i);
+            placements[i] = PagePack.Placement(_key(i), i);
         }
 
         store.rebalance(placements);
@@ -560,7 +594,7 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](26);
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(_key(i), 0, i);
+            placements[i] = PagePack.Placement(_key(i), i);
         }
 
         wide.rebalance(placements);
@@ -583,7 +617,7 @@ contract PagePackTest is Test {
             store.set(keys[i], 0, i + 1);
 
             // Reverse order exercises the sort.
-            placements[i] = PagePack.Placement(keys[i], 0, keys.length - 1 - i);
+            placements[i] = PagePack.Placement(keys[i], keys.length - 1 - i);
         }
 
         store.rebalance(placements);
@@ -608,7 +642,7 @@ contract PagePackTest is Test {
         }
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
 
         store.rebalance(placements);
@@ -617,8 +651,8 @@ contract PagePackTest is Test {
 
         for (uint256 i; i < 3; ++i) {
             uint256 victim = 7 + i * 400;
-            replacements[i] = PagePack.Placement(keys[victim], 0, PagePack.HOME);
-            replacements[3 + i] = PagePack.Placement(keys[PagePack.MAX_PACKED + i], 0, victim);
+            replacements[i] = PagePack.Placement(keys[victim], PagePack.HOME);
+            replacements[3 + i] = PagePack.Placement(keys[PagePack.MAX_PACKED + i], victim);
         }
 
         store.rebalance(replacements);
@@ -642,10 +676,10 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length + 1);
 
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
 
-        placements[keys.length] = PagePack.Placement(a, 0, 250);
+        placements[keys.length] = PagePack.Placement(a, 250);
         store.rebalance(placements);
 
         // Above and below a's index.
@@ -662,7 +696,7 @@ contract PagePackTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
 
         for (uint256 i; i < keys.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
 
         vm.expectRevert(PagePack.DirectoryFull.selector);
@@ -670,7 +704,7 @@ contract PagePackTest is Test {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Sizes
+    // Kinds
     // ------------------------------------------------------------------------------------------
 
     function test_pagesFitTheirEntriesAtEverySize() public pure {
@@ -685,170 +719,240 @@ contract PagePackTest is Test {
         }
     }
 
-    function test_viewsDifferOnlyInTheirSize() public {
-        store = new EntryStore(1, 0, false);
-        uint256 handle = uint256(PagedMap.unwrap(store.MAP()));
-        uint256 twoSlots = uint256(PagedMap.unwrap(store.sized(2)));
+    function test_handleListsItsKinds() public pure {
+        PagedMap m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2).build();
+        uint256 handle = uint256(PagedMap.unwrap(m));
 
-        // The low byte keeps the map's own size; the next one holds the size a handle looks up.
-        assertEq(handle & 0xffff, 0x0101);
-        assertEq(twoSlots & 0xffff, 0x0201);
-        assertEq(handle >> 16, twoSlots >> 16);
-        assertEq(PagedMap.unwrap(store.sized(1)), PagedMap.unwrap(store.MAP()));
+        // Flags (a map of kinds), entries per page, then a byte per kind.
+        assertEq(handle & 0xff, 0x40);
+        assertEq((handle >> 8) & 0xff, 50);
+        assertEq((handle >> 16) & 0xffffffffffffffff, 0x0201);
+        assertEq(m.slotsOf(0), 1);
+        assertEq(m.slotsOf(1), 2);
+        assertEq(m.slotsOf(2), 0);
+        assertEq(m.slotsOf(300), 0);
+
+        // The order kinds are listed in doesn't matter.
+        PagedMap other = PagePack.mapOfKinds("x").withKind(1, 2).withKind(0, 1).build();
+        assertEq(PagedMap.unwrap(other), PagedMap.unwrap(m));
+
+        // A map of one kind keeps its width as kind 0's, and has its own storage.
+        uint256 one = uint256(PagedMap.unwrap(PagePack.map("x", 3)));
+        assertEq(one & 0xffff, 32 << 8);
+        assertEq((one >> 16) & 0xffffffffffffffff, 3);
+        assertEq(one >> 80, handle >> 80);
     }
 
-    function test_sizeIsPartOfAnEntrysIdentity() public {
-        store = new EntryStore(1, 0, false);
-        bytes32 key = _key(1);
+    function test_keysKindSetsItsEntrysSize() public {
+        store = _kinded(1, 2);
+        (bytes32 a, bytes32 b) = (_key(0, 1), _key(1, 1));
 
-        store.set(key, 0, 10);
-        store.setSized(key, 2, 0, 20);
+        assertEq(store.sizeOf(a), 1);
+        assertEq(store.sizeOf(b), 2);
 
-        // One key at two sizes is two entries.
-        assertEq(store.slotOf(key), _home(key));
-        assertEq(store.slotOfSized(key, 2), _homeSized(key, 2));
-        assertTrue(_home(key) != _homeSized(key, 2));
-        assertEq(store.fingerprintOfSized(key, 2), _identitySized(key, 2) >> 234);
-        assertEq(store.get(key, 0), 10);
-        assertEq(store.get(key, 2, 0, 0), 20);
+        // The kind is part of the key, so these are two entries.
+        store.set(a, 0, 10);
+        store.set(b, 0, 20);
+        assertTrue(_home(a) != _home(b));
+        assertEq(store.get(a, 0), 10);
+        assertEq(store.get(b, 0), 20);
+
+        // In a map of one kind the top byte is only part of the key.
+        store = new EntryStore(3, 0, false);
+        assertEq(store.sizeOf(_key(5, 1)), 3);
+        assertEq(store.sizeOf(_key(200, 1)), 3);
     }
 
-    function test_sizedRevertsForEntriesTooWideForAPage() public {
-        store = new EntryStore(1, 0, false);
-        assertEq(store.dataSlotsPerPage(), 64);
+    function test_unknownKindCannotBePacked() public {
+        store = _kinded(1, 2);
 
-        store.sized(64);
+        vm.expectRevert(abi.encodeWithSelector(PagePack.UnknownKind.selector, 2));
+        store.sizeOf(_key(2, 1));
 
-        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 65));
-        store.sized(65);
+        vm.expectRevert(abi.encodeWithSelector(PagePack.UnknownKind.selector, 2));
+        store.rebalance(_placement(_key(2, 1), 0));
 
-        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 0));
-        store.sized(0);
+        vm.expectRevert(abi.encodeWithSelector(PagePack.UnknownKind.selector, 200));
+        store.rebalance(_placement(_key(200, 1), 0));
+
+        // Evicting one fails the same way, since it could never have been packed.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.UnknownKind.selector, 2));
+        store.rebalance(_eviction(_key(2, 1)));
+
+        // It can still be read and written at home, like any entry that isn't packed.
+        store.set(_key(2, 1), 0, 7);
+        assertEq(store.get(_key(2, 1), 0), 7);
+        assertEq(store.slotOf(_key(2, 1)), _home(_key(2, 1)));
+    }
+
+    function test_kindsMustBeNewAndInRange() public {
+        MapFactory factory = new MapFactory();
+
+        factory.kinds(7, 3);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidKind.selector, 8));
+        factory.kinds(8, 3);
+
+        // Kind 0 is already listed.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidKind.selector, 0));
+        factory.kinds(0, 3);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 0));
+        factory.kinds(1, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 128));
+        factory.kinds(1, 128);
+
+        // A map needs a kind.
+        vm.expectRevert(PagePack.NoKinds.selector);
+        factory.noKinds();
+
+        // With entries per page set by hand, every kind has to fit the data slots left.
+        factory.kinds(1, 64, 64);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidEntriesPerPage.selector, 64));
+        factory.kinds(1, 65, 64);
+    }
+
+    function test_structsAreCheckedAgainstTheirKind() public {
+        MapFactory factory = new MapFactory();
+
+        factory.requireFits(0, 1);
+        factory.requireFits(1, 2);
+        factory.requireFits(1, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.StructTooWide.selector, 2, 1));
+        factory.requireFits(0, 2);
+
+        // A kind the map doesn't list fits nothing.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.StructTooWide.selector, 1, 0));
+        factory.requireFits(2, 1);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Keys
+    // ------------------------------------------------------------------------------------------
+
+    function test_kindKeysKeepTheirInputOutOfTheKind() public {
+        MapFactory factory = new MapFactory();
+
+        assertEq(factory.kindKey(1, 7), bytes32((uint256(1) << 248) | 7));
+        assertEq(factory.kindKey(0, type(uint248).max), bytes32(uint256(type(uint248).max)));
+        assertEq(factory.kindKey(255, 0), bytes32(uint256(255) << 248));
+
+        // A value that reaches the top byte would name another kind's entry. It is refused, not
+        // cut short, which would make two values share an entry.
+        uint256 crafted = (uint256(1) << 248) | 7;
+        vm.expectRevert(abi.encodeWithSelector(PagePack.KeyTooLong.selector, crafted));
+        factory.kindKey(0, crafted);
+
+        // A hash keeps its first 31 bytes, whatever its top byte was.
+        bytes32 hash = bytes32(type(uint256).max);
+        assertEq(
+            factory.hashedKindKey(1, hash), bytes32((uint256(1) << 248) | (type(uint256).max >> 8))
+        );
+        assertEq(uint256(factory.hashedKindKey(0, hash)) >> 248, 0);
+    }
+
+    /// What the key functions prevent: a key whose top byte came from input reaches another
+    /// kind's entry, and writing a wider struct's second slot through it overwrites the packed
+    /// entry next to it.
+    function test_keyBuiltByHandFromInputReachesAnotherKind() public {
+        // Kind 0 is two slots, kind 1 is one.
+        store = _kinded(2, 1);
+        (bytes32 victim, bytes32 neighbour) =
+            (bytes32((uint256(1) << 248) | 7), bytes32((uint256(1) << 248) | 8));
+        store.set(victim, 0, 111);
+        store.set(neighbour, 0, 222);
+
+        // A getter for kind 0 that ORs an id from input under its kind.
+        uint256 id = (uint256(1) << 248) | 7;
+        bytes32 byHand = bytes32((uint256(0) << 248) | id);
+        assertEq(byHand, victim);
+        assertEq(store.sizeOf(byHand), 1);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(victim, 0);
+        placements[1] = PagePack.Placement(neighbour, 1);
+        store.rebalance(placements);
+
+        // The second slot of the two-slot struct lands on the neighbour.
+        store.set(byHand, 1, 666);
+        assertEq(store.get(neighbour, 0), 666);
     }
 
     function test_entriesOfSeveralSizesShareAPage() public {
-        store = new EntryStore(1, 0, false);
-        (bytes32 a, bytes32 b, bytes32 c) = (_key(1), _key(2), _key(3));
-        _fillSized(a, 2, 10);
-        _fillSized(b, 1, 20);
-        _fillSized(c, 3, 30);
+        store = _kinded(1, 2, 3);
+        (bytes32 a, bytes32 b, bytes32 c) = (_key(1, 1), _key(0, 2), _key(2, 3));
+        _fillAll(a, 10);
+        _fillAll(b, 20);
+        _fillAll(c, 30);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](3);
-        placements[0] = PagePack.Placement(a, 2, 0);
-        placements[1] = PagePack.Placement(b, 0, 1);
-        placements[2] = PagePack.Placement(c, 3, 2);
+        placements[0] = PagePack.Placement(a, 0);
+        placements[1] = PagePack.Placement(b, 1);
+        placements[2] = PagePack.Placement(c, 2);
         store.rebalance(placements);
 
-        // Data follows the page's 64 tags, in placement order, each entry as long as its size.
-        uint256 start = _directory() + 128;
-        assertEq(store.slotOfSized(a, 2), start + 64);
-        assertEq(store.slotOf(b), start + 66);
-        assertEq(store.slotOfSized(c, 3), start + 67);
+        // Data follows the page's tags, in placement order, each entry as long as its size.
+        uint256 data = _directory() + 128 + store.entriesPerPage();
+        assertEq(store.entriesPerPage(), 42);
+        assertEq(store.slotOf(a), data);
+        assertEq(store.slotOf(b), data + 2);
+        assertEq(store.slotOf(c), data + 3);
         assertEq(store.packedCount(), 3);
 
-        _assertFilledSized(a, 2, 10);
-        _assertFilledSized(b, 1, 20);
-        _assertFilledSized(c, 3, 30);
+        _assertAll(a, 10);
+        _assertAll(b, 20);
+        _assertAll(c, 30);
     }
 
-    function test_hintsCarryTheirSize() public {
-        store = new EntryStore(1, 0, false);
-        (bytes32 a, bytes32 b) = (_key(1), _key(2));
-        _fillSized(a, 2, 10);
-        _fillSized(b, 1, 20);
+    function test_hintsArePlainIndicesForEveryKind() public {
+        store = _kinded(1, 2);
+        (bytes32 a, bytes32 b) = (_key(1, 1), _key(0, 2));
+        _fillAll(a, 10);
+        _fillAll(b, 20);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(a, 2, 5);
-        placements[1] = PagePack.Placement(b, 0, 6);
+        placements[0] = PagePack.Placement(a, 5);
+        placements[1] = PagePack.Placement(b, 6);
         store.rebalance(placements);
 
-        // An entry of the map's own size has the hint it would in a map of one size. Another
-        // size rides above the low 11 bits.
-        uint256 hint = store.hintOfSized(a, 2);
+        assertEq(store.hintOf(a), 6);
         assertEq(store.hintOf(b), 7);
-        assertEq(hint, (2 << 11) | 6);
-        assertEq(store.hintOfSized(_key(3), 2), 0);
+        assertEq(store.hintOf(_key(1, 3)), 0);
 
-        uint256 expected = store.slotOfSized(a, 2);
-        assertEq(store.slotOfSized(a, 2, hint), expected);
+        uint256 expected = store.slotOf(a);
+        assertEq(store.slotOf(a, 6), expected);
 
-        // To a view of another size, it is only a wrong hint.
-        assertEq(store.slotOfSized(a, 3, hint), _homeSized(a, 3));
+        // For another key, it is only a wrong hint.
+        assertEq(store.slotOf(_key(1, 3), 6), _home(_key(1, 3)));
 
-        // Hints for both sizes load from one list, and the lookup then reads only the tag.
+        // Hints for both kinds load from one list, and the lookup then reads only the tag.
         PagePack.Hint[] memory hints = new PagePack.Hint[](2);
-        hints[0] = PagePack.Hint(a, hint);
+        hints[0] = PagePack.Hint(a, 6);
         hints[1] = PagePack.Hint(b, 7);
 
         vm.record();
-        assertEq(store.slotOfSizedWithHints(hints, a, 2), expected);
+        assertEq(store.slotOfWithHints(hints, a), expected);
 
         (bytes32[] memory reads,) = vm.accesses(address(store));
         assertEq(reads.length, 1);
         assertEq(uint256(reads[0]), _directory() + 128 + 5);
     }
 
-    function test_wrongSizePlacementPacksAnotherEntry() public {
-        store = new EntryStore(1, 0, false);
-        bytes32 key = _key(1);
-        _fillSized(key, 2, 10);
-
-        // The entry has two slots, but the placement names one: that is another, empty entry.
-        store.rebalance(_place(key, 1, 0));
-
-        assertEq(store.hintOf(key), 1);
-        assertEq(store.get(key, 0), 0);
-
-        // The two-slot entry stays home, whole.
-        assertEq(store.hintOfSized(key, 2), 0);
-        assertEq(store.slotOfSized(key, 2), _homeSized(key, 2));
-        _assertFilledSized(key, 2, 10);
-    }
-
-    /// A placement without a size takes the size of the handle it is given to: through a view,
-    /// the view's.
-    function test_placementsWithoutASizeTakeTheHandlesSize() public {
-        SizedEntryStore sizedStore = new SizedEntryStore(1, 0, false);
-        store = sizedStore;
-        (bytes32 a, bytes32 b) = (_key(1), _key(2));
-        _fillSized(a, 2, 10);
-        _fillSized(b, 1, 20);
-
-        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(a, 0, 0);
-        placements[1] = PagePack.Placement(b, 1, 1);
-        sizedStore.rebalanceSized(2, placements);
-
-        // The two-slot entry is packed, not an empty one-slot entry under the same key.
-        assertEq(store.hintOfSized(a, 2), (2 << 11) | 1);
-        assertEq(store.hintOf(a), 0);
-        assertEq(store.hintOf(b), 2);
-        _assertFilledSized(a, 2, 10);
-        _assertFilledSized(b, 1, 20);
-
-        // Evictions too.
-        sizedStore.rebalanceSized(2, _eviction(a));
-        assertEq(store.hintOfSized(a, 2), 0);
-        _assertFilledSized(a, 2, 10);
-
-        // Through the map itself, size 0 is the map's own.
-        store.rebalance(_place(a, 0, 2));
-        assertEq(store.hintOf(a), 3);
-        assertEq(store.hintOfSized(a, 2), 0);
-    }
-
     function test_movingWithinAPageMovesOnlyTags() public {
-        store = new EntryStore(1, 0, false);
-        (bytes32 a, bytes32 b) = (_key(1), _key(2));
-        _fillSized(a, 2, 10);
-        _fillSized(b, 1, 20);
+        store = _kinded(1, 2);
+        (bytes32 a, bytes32 b) = (_key(1, 1), _key(0, 2));
+        _fillAll(a, 10);
+        _fillAll(b, 20);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(a, 2, 0);
-        placements[1] = PagePack.Placement(b, 0, 1);
+        placements[0] = PagePack.Placement(a, 0);
+        placements[1] = PagePack.Placement(b, 1);
         store.rebalance(placements);
 
-        uint256 slotA = store.slotOfSized(a, 2);
+        uint256 slotA = store.slotOf(a);
         uint256 slotB = store.slotOf(b);
 
         // a takes b's index and b moves to a free one.
@@ -863,83 +967,79 @@ contract PagePackTest is Test {
         uint256 start = _directory() + 128;
 
         for (uint256 i; i < writes.length; ++i) {
-            if (uint256(writes[i]) >= start) assertLt(uint256(writes[i]), start + 64, "data");
+            if (uint256(writes[i]) >= start) {
+                assertLt(uint256(writes[i]), start + store.entriesPerPage(), "data");
+            }
         }
 
-        assertEq(store.slotOfSized(a, 2), slotA);
+        assertEq(store.slotOf(a), slotA);
         assertEq(store.slotOf(b), slotB);
-        assertEq(store.hintOfSized(a, 2), (2 << 11) | 2);
+        assertEq(store.hintOf(a), 2);
         assertEq(store.hintOf(b), 3);
-        _assertFilledSized(a, 2, 10);
-        _assertFilledSized(b, 1, 20);
+        _assertAll(a, 10);
+        _assertAll(b, 20);
     }
 
     /// Fills a page, frees two one-slot gaps and packs a two-slot entry: the staying entries
     /// slide together to make room, keeping their indices.
     function test_compactsAPageToFitAnEntry() public {
-        store = new EntryStore(1, 0, false);
-        bytes32[5] memory keys = [_key(1), _key(2), _key(3), _key(4), _key(5)];
-        uint256[5] memory sizes = [uint256(1), 30, 1, 32, 2];
+        // Kinds of 1, 30, 32 and 2 slots, on pages of 64 tags and 64 data slots.
+        uint256[] memory sizes = new uint256[](4);
+        (sizes[0], sizes[1], sizes[2], sizes[3]) = (1, 30, 32, 2);
+        store = new KindedEntryStore(sizes, 64, false);
+
+        bytes32[5] memory keys = [_key(0, 1), _key(1, 2), _key(0, 3), _key(2, 4), _key(3, 5)];
 
         for (uint256 i; i < 5; ++i) {
-            _fillSized(keys[i], sizes[i], 100 * (i + 1));
+            _fillAll(keys[i], 100 * (i + 1));
         }
 
         // 1 + 30 + 1 + 32 slots fill the page's 64 data slots.
         PagePack.Placement[] memory placements = new PagePack.Placement[](4);
 
         for (uint256 i; i < 4; ++i) {
-            placements[i] = PagePack.Placement(keys[i], sizes[i], i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
 
         store.rebalance(placements);
 
         uint256 start = _directory() + 128;
-        assertEq(store.slotOfSized(keys[3], 32), start + 96);
+        assertEq(store.slotOf(keys[3]), start + 96);
 
         placements = new PagePack.Placement[](3);
-        placements[0] = PagePack.Placement(keys[0], 1, PagePack.HOME);
-        placements[1] = PagePack.Placement(keys[2], 1, PagePack.HOME);
-        placements[2] = PagePack.Placement(keys[4], 2, 4);
+        placements[0] = PagePack.Placement(keys[0], PagePack.HOME);
+        placements[1] = PagePack.Placement(keys[2], PagePack.HOME);
+        placements[2] = PagePack.Placement(keys[4], 4);
         store.rebalance(placements);
 
-        assertEq(store.slotOfSized(keys[1], 30), start + 64);
-        assertEq(store.slotOfSized(keys[3], 32), start + 94);
-        assertEq(store.slotOfSized(keys[4], 2), start + 126);
+        assertEq(store.slotOf(keys[1]), start + 64);
+        assertEq(store.slotOf(keys[3]), start + 94);
+        assertEq(store.slotOf(keys[4]), start + 126);
 
         // Moving data doesn't move indices, so hints stay valid.
-        assertEq(store.hintOfSized(keys[1], 30), (30 << 11) | 2);
-        assertEq(store.hintOfSized(keys[3], 32), (32 << 11) | 4);
+        assertEq(store.hintOf(keys[1]), 2);
+        assertEq(store.hintOf(keys[3]), 4);
         assertEq(store.packedCount(), 3);
 
         for (uint256 i; i < 5; ++i) {
-            _assertFilledSized(keys[i], sizes[i], 100 * (i + 1));
+            _assertAll(keys[i], 100 * (i + 1));
         }
     }
 
     function test_revertsWhenPageFull() public {
-        store = new EntryStore(1, 0, false);
+        uint256[] memory sizes = new uint256[](2);
+        (sizes[0], sizes[1]) = (1, 64);
+        store = new KindedEntryStore(sizes, 64, false);
 
         // A 64-slot entry fills the page's data region, leaving 63 indices without room.
-        store.rebalance(_place(_key(1), 64, 0));
+        store.rebalance(_placement(_key(1, 1), 0));
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.PageFull.selector, 0));
-        store.rebalance(_place(_key(2), 0, 1));
+        store.rebalance(_placement(_key(0, 2), 1));
 
         // The next page has room.
-        store.rebalance(_place(_key(2), 0, 64));
-        assertEq(store.hintOf(_key(2)), 65);
-    }
-
-    function test_revertsWhenEntryTooWide() public {
-        store = new EntryStore(1, 0, false);
-
-        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 65));
-        store.rebalance(_place(_key(1), 65, 0));
-
-        // Evicting one fails the same way, since it could never have been packed.
-        vm.expectRevert(abi.encodeWithSelector(PagePack.EntryTooWide.selector, 300));
-        store.rebalance(_place(_key(1), 300, PagePack.HOME));
+        store.rebalance(_placement(_key(0, 2), 64));
+        assertEq(store.hintOf(_key(0, 2)), 65);
     }
 
     /// An attacker owns entry x, packed next to a victim's entry v, and writes into x a word
@@ -950,8 +1050,8 @@ contract PagePackTest is Test {
         (bytes32 x, bytes32 v, bytes32 y) = (_key(1), _key(2), _key(3));
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(x, 0, 0);
-        placements[1] = PagePack.Placement(v, 0, 1);
+        placements[0] = PagePack.Placement(x, 0);
+        placements[1] = PagePack.Placement(v, 1);
         store.rebalance(placements);
 
         uint256 victim = store.slotOf(v) - (_directory() + 128);
@@ -969,19 +1069,57 @@ contract PagePackTest is Test {
     // ------------------------------------------------------------------------------------------
 
     function test_mapsCanSetEntriesPerPage() public pure {
-        PagedMap m = PagePack.map("x", 1, 50);
+        PagedMap m = PagePack.map("x", 1).withEntriesPerPage(50);
 
         assertEq(m.entriesPerPage(), 50);
         assertEq(m.dataSlotsPerPage(), 78);
         assertEq(m.width(), 1);
-        assertEq((uint256(PagedMap.unwrap(m)) >> 16) & 0xff, 50);
+        assertEq((uint256(PagedMap.unwrap(m)) >> 8) & 0xff, 50);
 
         // The default is as many entries of the map's size as fit, so naming it changes nothing.
-        assertEq(PagedMap.unwrap(PagePack.map("x", 1, 64)), PagedMap.unwrap(PagePack.map("x", 1)));
         assertEq(
-            PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3, 32)),
+            PagedMap.unwrap(PagePack.map("x", 1).withEntriesPerPage(64)),
+            PagedMap.unwrap(PagePack.map("x", 1))
+        );
+        assertEq(
+            PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3).withEntriesPerPage(32)),
             PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3))
         );
+
+        PagedMap kinds = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2).build();
+        assertEq(PagedMap.unwrap(kinds.withEntriesPerPage(50)), PagedMap.unwrap(kinds));
+
+        // Setting it twice keeps the last count.
+        assertEq(
+            PagedMap.unwrap(kinds.withEntriesPerPage(40).withEntriesPerPage(50)),
+            PagedMap.unwrap(kinds)
+        );
+    }
+
+    /// By default a map of several kinds fits as many of each as it can, in equal numbers.
+    function test_kindsSetTheDefaultEntriesPerPage() public pure {
+        PagedMap m = PagePack.mapOfKinds("x").withKind(0, 1).build();
+        assertEq(m.entriesPerPage(), 64);
+
+        // One- and two-slot entries, 25 of each: 50 tags and 75 of 78 data slots.
+        m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2).build();
+        assertEq(m.entriesPerPage(), 50);
+
+        // Four one-slot kinds fit as a map of one does.
+        m = PagePack.mapOfKinds("x")
+            .withKind(0, 1)
+            .withKind(1, 1)
+            .withKind(2, 1)
+            .withKind(3, 1)
+            .build();
+        assertEq(m.entriesPerPage(), 64);
+
+        // Too wide for one of each: as many of the widest as fit.
+        m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 127).build();
+        assertEq(m.entriesPerPage(), 1);
+
+        m = PagePack.mapOfKinds("x").withKind(0, 60).withKind(1, 60).withKind(2, 60).build();
+        assertEq(m.entriesPerPage(), 2);
     }
 
     function test_invalidEntriesPerPageReverts() public {
@@ -1003,23 +1141,26 @@ contract PagePackTest is Test {
     }
 
     /// Two-slot accounts and one-slot approvals, one each: 64 tags leave room for 21 pairs on a
-    /// page, and 50 tags for 25.
+    /// page, and the default for the two kinds, 50 tags, for 25.
     function test_fewerTagsFitMoreMixedEntries() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](50);
 
-        for (uint256 i; i < 25; ++i) {
-            placements[2 * i] = PagePack.Placement(_key(2 * i), 2, 2 * i);
-            placements[2 * i + 1] = PagePack.Placement(_key(2 * i + 1), 1, 2 * i + 1);
+        for (uint256 i; i < 50; ++i) {
+            placements[i] = PagePack.Placement(_key(1 - i % 2, i), i);
         }
 
-        store = new EntryStore(1, 0, false);
+        uint256[] memory sizes = new uint256[](2);
+        (sizes[0], sizes[1]) = (1, 2);
+
+        store = new KindedEntryStore(sizes, 64, false);
         vm.expectRevert(abi.encodeWithSelector(PagePack.PageFull.selector, 0));
         store.rebalance(placements);
 
-        store = new EntryStore(1, 50, false);
+        store = new KindedEntryStore(sizes, 0, false);
+        assertEq(store.entriesPerPage(), 50);
 
         for (uint256 i; i < 50; ++i) {
-            _fillSized(_key(i), 2 - i % 2, 10 * i);
+            _fillAll(_key(1 - i % 2, i), 10 * i);
         }
 
         store.rebalance(placements);
@@ -1027,10 +1168,8 @@ contract PagePackTest is Test {
         uint256 page = (_directory() + 128) >> 7;
 
         for (uint256 i; i < 50; ++i) {
-            uint256 slots = 2 - i % 2;
-
-            assertEq(store.slotOfSized(_key(i), slots) >> 7, page, "another page");
-            _assertFilledSized(_key(i), slots, 10 * i);
+            assertEq(store.slotOf(_key(1 - i % 2, i)) >> 7, page, "another page");
+            _assertAll(_key(1 - i % 2, i), 10 * i);
         }
     }
 
@@ -1057,7 +1196,7 @@ contract PagePackTest is Test {
             if (_random(seed, i) % 3 == 0) continue;
 
             uint256 index = _freeIndex(taken, _random(seed, i + 1000));
-            first[firstCount++] = PagePack.Placement(_key(i), 0, index);
+            first[firstCount++] = PagePack.Placement(_key(i), index);
             indexOf[i] = index + 1;
         }
 
@@ -1072,11 +1211,11 @@ contract PagePackTest is Test {
             uint256 roll = _random(seed, i + 2000) % 4;
 
             if (indexOf[i] != 0 && roll == 0) {
-                second[secondCount++] = PagePack.Placement(_key(i), 0, PagePack.HOME);
+                second[secondCount++] = PagePack.Placement(_key(i), PagePack.HOME);
                 indexOf[i] = 0;
             } else if (roll == 1) {
                 uint256 index = _freeIndex(taken, _random(seed, i + 3000));
-                second[secondCount++] = PagePack.Placement(_key(i), 0, index);
+                second[secondCount++] = PagePack.Placement(_key(i), index);
                 indexOf[i] = index + 1;
             }
         }
@@ -1113,10 +1252,8 @@ contract PagePackTest is Test {
         return _identity(key) & ~uint256(127);
     }
 
-    /// Every size in a map shares the directory, so its address leaves out the size byte.
     function _directory() internal view returns (uint256) {
-        uint256 handle = uint256(PagedMap.unwrap(store.MAP())) & ~uint256(0xff00);
-        return uint256(keccak256(abi.encode(handle))) & ~uint256(127);
+        return uint256(keccak256(abi.encode(store.MAP()))) & ~uint256(127);
     }
 
     /// The slot holding packed `index`'s tag: packed pages follow the directory, and each starts
@@ -1145,36 +1282,41 @@ contract PagePackTest is Test {
         return uint256(vm.load(address(store), bytes32(_home(key) + 127)));
     }
 
-    /// The identity of `key` looked up at `slots`, through a view.
-    function _identitySized(bytes32 key, uint256 slots) internal view returns (uint256) {
-        uint256 handle = uint256(PagedMap.unwrap(store.MAP())) & ~uint256(0xff00);
-        return uint256(keccak256(abi.encode(handle | (slots << 8), key)));
+    /// A key of `kind`: the kind in the top byte over 31 bytes of a hash.
+    function _key(uint256 kind, uint256 i) internal pure returns (bytes32) {
+        return bytes32((kind << 248) | (uint256(keccak256(abi.encode("key", i))) >> 8));
     }
 
-    function _homeSized(bytes32 key, uint256 slots) internal view returns (uint256) {
-        return _identitySized(key, slots) & ~uint256(127);
+    /// A store whose kinds 0, 1, ... have these sizes, with the default entries per page.
+    function _kinded(uint256 a, uint256 b) internal returns (KindedEntryStore) {
+        uint256[] memory sizes = new uint256[](2);
+        (sizes[0], sizes[1]) = (a, b);
+
+        return new KindedEntryStore(sizes, 0, false);
+    }
+
+    function _kinded(uint256 a, uint256 b, uint256 c) internal returns (KindedEntryStore) {
+        uint256[] memory sizes = new uint256[](3);
+        (sizes[0], sizes[1], sizes[2]) = (a, b, c);
+
+        return new KindedEntryStore(sizes, 0, false);
     }
 
     /// Writes value, value + 1, ... into each of the entry's slots.
-    function _fillSized(bytes32 key, uint256 slots, uint256 value) internal {
+    function _fillAll(bytes32 key, uint256 value) internal {
+        uint256 slots = store.sizeOf(key);
+
         for (uint256 i; i < slots; ++i) {
-            store.setSized(key, slots, i, value + i);
+            store.set(key, i, value + i);
         }
     }
 
-    function _assertFilledSized(bytes32 key, uint256 slots, uint256 value) internal view {
-        for (uint256 i; i < slots; ++i) {
-            assertEq(store.get(key, slots, i, 0), value + i);
-        }
-    }
+    function _assertAll(bytes32 key, uint256 value) internal view {
+        uint256 slots = store.sizeOf(key);
 
-    function _place(bytes32 key, uint256 slots, uint256 index)
-        internal
-        pure
-        returns (PagePack.Placement[] memory placements)
-    {
-        placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, slots, index);
+        for (uint256 i; i < slots; ++i) {
+            assertEq(store.get(key, i), value + i);
+        }
     }
 
     function _fingerprint(bytes32 key) internal view returns (uint256) {
@@ -1210,12 +1352,12 @@ contract PagePackTest is Test {
         returns (PagePack.Placement[] memory placements)
     {
         placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, 0, index);
+        placements[0] = PagePack.Placement(key, index);
     }
 
     function _eviction(bytes32 key) internal pure returns (PagePack.Placement[] memory placements) {
         placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, 0, PagePack.HOME);
+        placements[0] = PagePack.Placement(key, PagePack.HOME);
     }
 
     function _join(PagePack.Placement[] memory a, PagePack.Placement[] memory b)
