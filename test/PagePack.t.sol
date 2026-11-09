@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack, PagedMap} from "pagepack/PagePack.sol";
-import {EntryStore} from "./utils/EntryStore.sol";
+import {EntryStore, SizedEntryStore} from "./utils/EntryStore.sol";
 
 /// Loads hints in one call to the store and looks an entry up in another, as a contract would
 /// within one transaction.
@@ -803,6 +803,38 @@ contract PagePackTest is Test {
         assertEq(store.hintOfSized(key, 2), 0);
         assertEq(store.slotOfSized(key, 2), _homeSized(key, 2));
         _assertFilledSized(key, 2, 10);
+    }
+
+    /// A placement without a size takes the size of the handle it is given to: through a view,
+    /// the view's.
+    function test_placementsWithoutASizeTakeTheHandlesSize() public {
+        SizedEntryStore sizedStore = new SizedEntryStore(1, 0, false);
+        store = sizedStore;
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _fillSized(a, 2, 10);
+        _fillSized(b, 1, 20);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(a, 0, 0);
+        placements[1] = PagePack.Placement(b, 1, 1);
+        sizedStore.rebalanceSized(2, placements);
+
+        // The two-slot entry is packed, not an empty one-slot entry under the same key.
+        assertEq(store.hintOfSized(a, 2), (2 << 11) | 1);
+        assertEq(store.hintOf(a), 0);
+        assertEq(store.hintOf(b), 2);
+        _assertFilledSized(a, 2, 10);
+        _assertFilledSized(b, 1, 20);
+
+        // Evictions too.
+        sizedStore.rebalanceSized(2, _eviction(a));
+        assertEq(store.hintOfSized(a, 2), 0);
+        _assertFilledSized(a, 2, 10);
+
+        // Through the map itself, size 0 is the map's own.
+        store.rebalance(_place(a, 0, 2));
+        assertEq(store.hintOf(a), 3);
+        assertEq(store.hintOfSized(a, 2), 0);
     }
 
     function test_movingWithinAPageMovesOnlyTags() public {

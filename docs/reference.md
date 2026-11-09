@@ -175,8 +175,8 @@ which caps it at 12.
                packing or evicting rebuilds the directory once
 ```
 
-Each placement names an entry's key, its size (0 for the map's own) and its new index, or `HOME`
-to send it home. The request describes the layout after the call, so its order doesn't matter.
+Each placement names an entry's key, its size and its new index, or `HOME` to send it home. Size 0
+means the size of the handle `rebalance` is called on: the map's own, or a view's from `sized`. The request describes the layout after the call, so its order doesn't matter.
 
 pagepack picks where on the page each entry's data goes. It reads the tags of each page that
 receives entries, then gives each arriving entry the first gap that fits, in placement order. An

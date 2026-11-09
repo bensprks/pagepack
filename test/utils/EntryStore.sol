@@ -121,3 +121,16 @@ contract EntryStore {
         return MAP.sized(slots).fingerprintOf(key);
     }
 }
+
+/// An EntryStore that also rebalances through views. Kept apart so the benchmarks' store keeps
+/// its bytecode, and so its gas.
+contract SizedEntryStore is EntryStore {
+    constructor(uint256 slots, uint256 perPage, bool homeHints)
+        EntryStore(slots, perPage, homeHints)
+    {}
+
+    /// Rebalances through a view of `slots`, so placements of size 0 take that size.
+    function rebalanceSized(uint256 slots, PagePack.Placement[] memory placements) external {
+        MAP.sized(slots).rebalance(placements);
+    }
+}

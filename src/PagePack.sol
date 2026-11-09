@@ -84,7 +84,8 @@ using PagePack for Entry global;
 /// tag region, so nothing written into an entry's data can pose as a tag.
 library PagePack {
     /// Puts the entry for `key` at packed `index`, or sends it home if `index` is HOME. `slots`
-    /// is the entry's size, 0 for the map's own.
+    /// is the entry's size, or 0 for the size of the handle given to {rebalance}: the map's own,
+    /// or the size passed to {sized}.
     struct Placement {
         bytes32 key;
         uint256 slots;
@@ -512,8 +513,9 @@ library PagePack {
     ///      call. Placing an entry at the index it already holds does nothing, so a caller can
     ///      resubmit a layout cheaply.
     ///
-    ///      A placement names the entry's size, which is part of its identity: a wrong size names
-    ///      another entry, usually an empty one at home, and leaves the intended one where it is.
+    ///      A placement names the entry's size, or 0 for this handle's: the map's own, or a view's
+    ///      from {sized}. Size is part of an entry's identity, so a wrong size names another
+    ///      entry, usually an empty one at home, and leaves the intended one where it is.
     ///
     ///      The call picks each arriving entry's data slots: the first gap on the page that
     ///      fits, in placement order. An entry moving to another index on the same page keeps
@@ -603,7 +605,8 @@ library PagePack {
         // Runs for every placement, including each one of a resubmitted layout, so it is
         // assembly: the entry's identity at its size, and whether its target already holds it.
         assembly ("memory-safe") {
-            if iszero(slots) { slots := and(m, MAP_SLOTS_MASK) }
+            // The handle's size byte, the second lowest.
+            if iszero(slots) { slots := byte(30, m) }
 
             mstore(0x00, or(and(m, not(SLOTS_BYTE)), shl(SLOTS_SHIFT, and(slots, 0xff))))
             mstore(0x20, mload(p))
