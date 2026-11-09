@@ -12,8 +12,9 @@ import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 //     ACCOUNTS.approval(owner, spender).amount -= amount;
 //
 // The map lists each kind with its struct's size, and each key names its kind in its top byte,
-// so a struct always fits its entry and nothing else ever passes a size. Code driving the layout
-// names entries by key alone:
+// so a struct always fits its entry and nothing else ever passes a size. The key functions take
+// that byte from a constant and keep their input out of it. Code driving the layout names
+// entries by key alone:
 //
 //     ACCOUNTS.map().rebalance(placements); // PagePack.Placement(accountKey(owner), index)
 //     ACCOUNTS.map().useHints(hints);       // PagePack.Hint(key, ACCOUNTS.map().hintOf(key))
@@ -45,7 +46,8 @@ uint256 constant ACCOUNT = 1;
 function accountMap(string memory name) view returns (AccountMap) {
     PagedMap entries = PagePack.mapOfKinds(name)
         .withKind(APPROVAL, approvalSlots())
-        .withKind(ACCOUNT, accountSlots());
+        .withKind(ACCOUNT, accountSlots())
+        .build();
 
     return AccountMap.wrap(PagedMap.unwrap(entries));
 }
@@ -77,15 +79,16 @@ function map(AccountMap entries) pure returns (PagedMap) {
     return PagedMap.wrap(AccountMap.unwrap(entries));
 }
 
-// Keys. Each holds its kind in the top byte. An address fits in the 31 bytes below it. Two
-// addresses don't, so an approval's key is a hash, cut to 31 bytes.
+// Keys. Each holds its kind in the top byte, which picks the entry's size, so it comes from a
+// constant and nothing a caller supplies can reach it. An address fits in the 31 bytes below.
+// Two addresses don't, so an approval's key is a hash, cut to 31 bytes.
 
 function accountKey(address owner) pure returns (bytes32) {
-    return bytes32((ACCOUNT << 248) | uint160(owner));
+    return PagePack.kindKey(ACCOUNT, uint160(owner));
 }
 
 function approvalKey(address owner, address spender) pure returns (bytes32) {
-    return bytes32((APPROVAL << 248) | (uint256(keccak256(abi.encode(owner, spender))) >> 8));
+    return PagePack.hashedKindKey(APPROVAL, keccak256(abi.encode(owner, spender)));
 }
 
 // Sizes. A struct's size in slots is how far apart two of them sit in a storage array. These

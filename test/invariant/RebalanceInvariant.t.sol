@@ -3,14 +3,15 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack, PagedMap} from "pagepack/PagePack.sol";
-import {KindedEntryStore} from "../utils/EntryStore.sol";
+import {EntryReader, KindedEntryStore, PlainEntryStore} from "../utils/EntryStore.sol";
 
 /// A map's shape and the part of it a handler drives.
 struct Geometry {
-    // Tags per page.
+    // Tags per page, or 0 for the map's default.
     uint256 perPage;
     bool homeHints;
-    // The sizes of the map's kinds. Keys take turns being each kind.
+    // The sizes of the map's kinds. Keys take turns being each kind. One size makes a map of
+    // one kind, whose keys are any 32 bytes.
     uint256[] sizes;
     uint256 keys;
     // The packed indices the handler uses: `indices` of them from `first`.
@@ -25,7 +26,7 @@ struct Geometry {
 contract RebalanceHandler is Test {
     uint256 public constant MAX_KEYS = 64;
 
-    KindedEntryStore public immutable store;
+    EntryReader public immutable store;
 
     uint256 public immutable PER_PAGE;
     uint256 public immutable DATA_SLOTS;
@@ -50,19 +51,20 @@ contract RebalanceHandler is Test {
     uint256 public rejected;
     uint256 public mismatches;
 
-    constructor(KindedEntryStore store_, Geometry memory geometry) {
+    constructor(EntryReader store_, Geometry memory geometry) {
         store = store_;
-        PER_PAGE = geometry.perPage;
-        DATA_SLOTS = 128 - geometry.perPage;
+        PER_PAGE = store_.entriesPerPage();
+        DATA_SLOTS = store_.dataSlotsPerPage();
         KEYS = geometry.keys;
         FIRST = geometry.first;
         INDICES = geometry.indices;
         sizes = geometry.sizes;
 
         for (uint256 i; i < KEYS; ++i) {
-            // The kind in the top byte, over 31 bytes of a hash.
-            uint256 kind = i % sizes.length;
-            keys[i] = bytes32((kind << 248) | (uint256(keccak256(abi.encode("invariant", i))) >> 8));
+            // In a map of kinds, the kind in the top byte over 31 bytes of a hash. In a map of
+            // one kind, the whole hash, whatever its top byte.
+            bytes32 hash = keccak256(abi.encode("invariant", i));
+            keys[i] = sizes.length == 1 ? hash : PagePack.hashedKindKey(i % sizes.length, hash);
         }
     }
 
@@ -520,7 +522,7 @@ contract RebalanceHandler is Test {
 
 /// Runs once per geometry: page shapes, entry sizes, index ranges and both kinds of map.
 abstract contract RebalanceInvariantTest is Test {
-    KindedEntryStore internal store;
+    EntryReader internal store;
     RebalanceHandler internal handler;
     Geometry internal geometry;
 
@@ -528,11 +530,17 @@ abstract contract RebalanceInvariantTest is Test {
 
     function setUp() public {
         geometry = _geometry();
-        store = new KindedEntryStore(geometry.sizes, geometry.perPage, geometry.homeHints);
+        store = geometry.sizes.length == 1
+            ? EntryReader(
+                new PlainEntryStore(geometry.sizes[0], geometry.perPage, geometry.homeHints)
+            )
+            : EntryReader(
+                new KindedEntryStore(geometry.sizes, geometry.perPage, geometry.homeHints)
+            );
         handler = new RebalanceHandler(store, geometry);
 
-        assertEq(store.entriesPerPage(), handler.PER_PAGE());
-        assertEq(store.dataSlotsPerPage(), handler.DATA_SLOTS());
+        if (geometry.perPage != 0) assertEq(store.entriesPerPage(), geometry.perPage);
+        assertEq(handler.DATA_SLOTS(), 128 - handler.PER_PAGE());
         assertLe(geometry.keys, handler.MAX_KEYS());
         assertLe(geometry.first + geometry.indices, PagePack.MAX_INDEX);
 
@@ -663,6 +671,16 @@ abstract contract RebalanceInvariantTest is Test {
         return uint256(vm.load(address(store), bytes32(home + 127)));
     }
 
+    function _sizes(uint256 a) internal pure returns (uint256[] memory list) {
+        list = new uint256[](1);
+        list[0] = a;
+    }
+
+    function _sizes(uint256 a, uint256 b) internal pure returns (uint256[] memory list) {
+        list = new uint256[](2);
+        (list[0], list[1]) = (a, b);
+    }
+
     function _sizes(uint256 a, uint256 b, uint256 c, uint256 d)
         internal
         pure
@@ -721,12 +739,31 @@ contract RebalanceInvariantFortyTwoTagsTest is RebalanceInvariantTest {
     }
 }
 
-/// Accounts and approvals: 50 tags for one- and two-slot entries, and 78 data slots.
+/// Accounts and approvals: kinds of one and two slots, with the entries per page a map of those
+/// kinds has by default, 50, and 78 data slots.
 /// forge-config: default.invariant.runs = 32
 /// forge-config: default.invariant.depth = 50
 contract RebalanceInvariantFiftyTagsTest is RebalanceInvariantTest {
     function _geometry() internal pure override returns (Geometry memory) {
-        return Geometry(50, false, _sizes(1, 2, 1, 2), 64, 0, 150);
+        return Geometry(0, false, _sizes(1, 2), 64, 0, 150);
+    }
+
+    function test_usesTheDefaultEntriesPerPage() public view {
+        assertEq(store.entriesPerPage(), 50);
+    }
+}
+
+/// A map of one kind made with `map`, three slots wide, with its default 32 entries per page.
+/// Its keys are whole hashes, so their top bytes are arbitrary and mean nothing.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantOneKindTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(0, true, _sizes(3), 64, 0, 100);
+    }
+
+    function test_usesTheDefaultEntriesPerPage() public view {
+        assertEq(store.entriesPerPage(), 32);
     }
 }
 

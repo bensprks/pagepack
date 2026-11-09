@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
+import {Entry, MapBuilder, PagePack, PagedMap} from "pagepack/PagePack.sol";
 
 /// Exposes PagePack over a single map so tests can drive it through external calls.
 abstract contract EntryStoreBase {
@@ -82,13 +82,10 @@ contract EntryStore is EntryStoreBase {
     {}
 }
 
-/// A map of several kinds: kind `i` is `sizes[i]` slots wide, and a key's top byte names its
-/// kind. Kept apart so the benchmarks' store keeps its bytecode, and so its gas.
-contract KindedEntryStore is EntryStoreBase {
-    /// @param perPage Entries per page, or 0 for the default.
-    constructor(uint256[] memory sizes, uint256 perPage, bool homeHints)
-        EntryStoreBase(_mapOfKinds(sizes, perPage, homeHints))
-    {}
+/// A store that also reads whole entries. Kept apart so the benchmarks' store keeps its
+/// bytecode, and so its gas.
+abstract contract EntryReader is EntryStoreBase {
+    constructor(PagedMap map_) EntryStoreBase(map_) {}
 
     /// Every data slot of the entry, found with `hint`.
     function readAll(bytes32 key, uint256 hint) external view returns (uint256[] memory data) {
@@ -113,6 +110,23 @@ contract KindedEntryStore is EntryStoreBase {
     }
 }
 
+/// A map of one kind, `slots` wide, whose keys are any 32 bytes.
+contract PlainEntryStore is EntryReader {
+    /// @param perPage Entries per page, or 0 for the default.
+    constructor(uint256 slots, uint256 perPage, bool homeHints)
+        EntryReader(_mapOfOneKind(slots, perPage, homeHints))
+    {}
+}
+
+/// A map of several kinds: kind `i` is `sizes[i]` slots wide, and a key's top byte names its
+/// kind.
+contract KindedEntryStore is EntryReader {
+    /// @param perPage Entries per page, or 0 for the default.
+    constructor(uint256[] memory sizes, uint256 perPage, bool homeHints)
+        EntryReader(_mapOfKinds(sizes, perPage, homeHints))
+    {}
+}
+
 function _mapOfOneKind(uint256 slots, uint256 perPage, bool homeHints) pure returns (PagedMap m) {
     m = homeHints
         ? PagePack.mapWithHomeHints("pagepack.test", slots)
@@ -125,13 +139,15 @@ function _mapOfKinds(uint256[] memory sizes, uint256 perPage, bool homeHints)
     pure
     returns (PagedMap m)
 {
-    m = homeHints
+    MapBuilder kinds = homeHints
         ? PagePack.mapOfKindsWithHomeHints("pagepack.test")
         : PagePack.mapOfKinds("pagepack.test");
 
     for (uint256 kind; kind < sizes.length; ++kind) {
-        m = m.withKind(kind, sizes[kind]);
+        kinds = kinds.withKind(kind, sizes[kind]);
     }
+
+    m = kinds.build();
 
     if (perPage != 0) m = m.withEntriesPerPage(perPage);
 }

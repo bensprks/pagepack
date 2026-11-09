@@ -195,20 +195,20 @@ contract PinnedMap is AccountsAndApprovals {
 }
 
 /// One map of two kinds, one-slot approvals and two-slot accounts. Each key holds its kind in
-/// the top byte, over the low 31 bytes of the benchmark's key.
+/// the top byte, over the first 31 bytes of the benchmark's key.
 contract KindedMap is AccountsAndApprovals {
     uint256 internal constant APPROVAL = 0;
     uint256 internal constant ACCOUNT = 1;
 
     PagedMap internal immutable MAP =
-        PagePack.mapOfKinds("bench.mixed").withKind(APPROVAL, 1).withKind(ACCOUNT, 2);
+        PagePack.mapOfKinds("bench.mixed").withKind(APPROVAL, 1).withKind(ACCOUNT, 2).build();
 
     function accountKeyOf(bytes32 key) public pure override returns (bytes32) {
-        return bytes32((ACCOUNT << 248) | (uint256(key) << 8 >> 8));
+        return PagePack.hashedKindKey(ACCOUNT, key);
     }
 
     function approvalKeyOf(bytes32 key) public pure override returns (bytes32) {
-        return bytes32((APPROVAL << 248) | (uint256(key) << 8 >> 8));
+        return PagePack.hashedKindKey(APPROVAL, key);
     }
 
     function account(bytes32 key) internal view override returns (Entry) {

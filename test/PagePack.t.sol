@@ -23,15 +23,38 @@ contract MapFactory {
         return PagePack.map("pagepack.factory", slots).withEntriesPerPage(perPage);
     }
 
-    function kinds(uint256 perPage, uint256 kind, uint256 slots) external pure returns (PagedMap) {
-        PagedMap m = PagePack.mapOfKinds("pagepack.factory").withKind(0, 1);
-        if (perPage != 0) m = m.withEntriesPerPage(perPage);
-
-        return m.withKind(kind, slots);
+    /// A map of kinds: kind 0 of one slot, and `kind` of `slots`.
+    function kinds(uint256 kind, uint256 slots) external pure returns (PagedMap) {
+        return PagePack.mapOfKinds("pagepack.factory").withKind(0, 1).withKind(kind, slots).build();
     }
 
-    function addKind(uint256 kind, uint256 slots) external pure returns (PagedMap) {
-        return PagePack.map("pagepack.factory", 1).withKind(kind, slots);
+    /// The same, with entries per page set by hand.
+    function kinds(uint256 kind, uint256 slots, uint256 perPage) external pure returns (PagedMap) {
+        return PagePack.mapOfKinds("pagepack.factory")
+            .withKind(0, 1)
+            .withKind(kind, slots)
+            .build()
+            .withEntriesPerPage(perPage);
+    }
+
+    function noKinds() external pure returns (PagedMap) {
+        return PagePack.mapOfKinds("pagepack.factory").build();
+    }
+
+    function requireFits(uint256 kind, uint256 slots) external pure {
+        PagePack.mapOfKinds("pagepack.factory")
+            .withKind(0, 1)
+            .withKind(1, 2)
+            .build()
+            .requireFits(kind, slots);
+    }
+
+    function kindKey(uint256 kind, uint256 value) external pure returns (bytes32) {
+        return PagePack.kindKey(kind, value);
+    }
+
+    function hashedKindKey(uint256 kind, bytes32 hash) external pure returns (bytes32) {
+        return PagePack.hashedKindKey(kind, hash);
     }
 }
 
@@ -697,7 +720,7 @@ contract PagePackTest is Test {
     }
 
     function test_handleListsItsKinds() public pure {
-        PagedMap m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2);
+        PagedMap m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2).build();
         uint256 handle = uint256(PagedMap.unwrap(m));
 
         // Flags (a map of kinds), entries per page, then a byte per kind.
@@ -710,7 +733,7 @@ contract PagePackTest is Test {
         assertEq(m.slotsOf(300), 0);
 
         // The order kinds are listed in doesn't matter.
-        PagedMap other = PagePack.mapOfKinds("x").withKind(1, 2).withKind(0, 1);
+        PagedMap other = PagePack.mapOfKinds("x").withKind(1, 2).withKind(0, 1).build();
         assertEq(PagedMap.unwrap(other), PagedMap.unwrap(m));
 
         // A map of one kind keeps its width as kind 0's, and has its own storage.
@@ -765,30 +788,97 @@ contract PagePackTest is Test {
     function test_kindsMustBeNewAndInRange() public {
         MapFactory factory = new MapFactory();
 
-        factory.kinds(0, 7, 3);
+        factory.kinds(7, 3);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidKind.selector, 8));
-        factory.kinds(0, 8, 3);
+        factory.kinds(8, 3);
 
         // Kind 0 is already listed.
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidKind.selector, 0));
-        factory.kinds(0, 0, 3);
-
-        // A map of one kind takes no more.
-        vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidKind.selector, 1));
-        factory.addKind(1, 2);
+        factory.kinds(0, 3);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 0));
-        factory.kinds(0, 1, 0);
+        factory.kinds(1, 0);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidWidth.selector, 128));
-        factory.kinds(0, 1, 128);
+        factory.kinds(1, 128);
+
+        // A map needs a kind.
+        vm.expectRevert(PagePack.NoKinds.selector);
+        factory.noKinds();
 
         // With entries per page set by hand, every kind has to fit the data slots left.
-        factory.kinds(64, 1, 64);
+        factory.kinds(1, 64, 64);
 
         vm.expectRevert(abi.encodeWithSelector(PagePack.InvalidEntriesPerPage.selector, 64));
-        factory.kinds(64, 1, 65);
+        factory.kinds(1, 65, 64);
+    }
+
+    function test_structsAreCheckedAgainstTheirKind() public {
+        MapFactory factory = new MapFactory();
+
+        factory.requireFits(0, 1);
+        factory.requireFits(1, 2);
+        factory.requireFits(1, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.StructTooWide.selector, 2, 1));
+        factory.requireFits(0, 2);
+
+        // A kind the map doesn't list fits nothing.
+        vm.expectRevert(abi.encodeWithSelector(PagePack.StructTooWide.selector, 1, 0));
+        factory.requireFits(2, 1);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Keys
+    // ------------------------------------------------------------------------------------------
+
+    function test_kindKeysKeepTheirInputOutOfTheKind() public {
+        MapFactory factory = new MapFactory();
+
+        assertEq(factory.kindKey(1, 7), bytes32((uint256(1) << 248) | 7));
+        assertEq(factory.kindKey(0, type(uint248).max), bytes32(uint256(type(uint248).max)));
+        assertEq(factory.kindKey(255, 0), bytes32(uint256(255) << 248));
+
+        // A value that reaches the top byte would name another kind's entry. It is refused, not
+        // cut short, which would make two values share an entry.
+        uint256 crafted = (uint256(1) << 248) | 7;
+        vm.expectRevert(abi.encodeWithSelector(PagePack.KeyTooLong.selector, crafted));
+        factory.kindKey(0, crafted);
+
+        // A hash keeps its first 31 bytes, whatever its top byte was.
+        bytes32 hash = bytes32(type(uint256).max);
+        assertEq(
+            factory.hashedKindKey(1, hash), bytes32((uint256(1) << 248) | (type(uint256).max >> 8))
+        );
+        assertEq(uint256(factory.hashedKindKey(0, hash)) >> 248, 0);
+    }
+
+    /// What the key functions prevent: a key whose top byte came from input reaches another
+    /// kind's entry, and writing a wider struct's second slot through it overwrites the packed
+    /// entry next to it.
+    function test_keyBuiltByHandFromInputReachesAnotherKind() public {
+        // Kind 0 is two slots, kind 1 is one.
+        store = _kinded(2, 1);
+        (bytes32 victim, bytes32 neighbour) =
+            (bytes32((uint256(1) << 248) | 7), bytes32((uint256(1) << 248) | 8));
+        store.set(victim, 0, 111);
+        store.set(neighbour, 0, 222);
+
+        // A getter for kind 0 that ORs an id from input under its kind.
+        uint256 id = (uint256(1) << 248) | 7;
+        bytes32 byHand = bytes32((uint256(0) << 248) | id);
+        assertEq(byHand, victim);
+        assertEq(store.sizeOf(byHand), 1);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(victim, 0);
+        placements[1] = PagePack.Placement(neighbour, 1);
+        store.rebalance(placements);
+
+        // The second slot of the two-slot struct lands on the neighbour.
+        store.set(byHand, 1, 666);
+        assertEq(store.get(neighbour, 0), 666);
     }
 
     function test_entriesOfSeveralSizesShareAPage() public {
@@ -986,43 +1076,50 @@ contract PagePackTest is Test {
         assertEq(m.width(), 1);
         assertEq((uint256(PagedMap.unwrap(m)) >> 8) & 0xff, 50);
 
-        // Setting it by hand is part of the map, even to the default: only a flag differs.
-        uint256 byHand = uint256(PagedMap.unwrap(PagePack.map("x", 1).withEntriesPerPage(64)));
-        uint256 byDefault = uint256(PagedMap.unwrap(PagePack.map("x", 1)));
-        assertEq(byHand ^ byDefault, 0x20);
+        // The default is as many entries of the map's size as fit, so naming it changes nothing.
+        assertEq(
+            PagedMap.unwrap(PagePack.map("x", 1).withEntriesPerPage(64)),
+            PagedMap.unwrap(PagePack.map("x", 1))
+        );
+        assertEq(
+            PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3).withEntriesPerPage(32)),
+            PagedMap.unwrap(PagePack.mapWithHomeHints("x", 3))
+        );
+
+        PagedMap kinds = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2).build();
+        assertEq(PagedMap.unwrap(kinds.withEntriesPerPage(50)), PagedMap.unwrap(kinds));
+
+        // Setting it twice keeps the last count.
+        assertEq(
+            PagedMap.unwrap(kinds.withEntriesPerPage(40).withEntriesPerPage(50)),
+            PagedMap.unwrap(kinds)
+        );
     }
 
     /// By default a map of several kinds fits as many of each as it can, in equal numbers.
     function test_kindsSetTheDefaultEntriesPerPage() public pure {
-        PagedMap m = PagePack.mapOfKinds("x").withKind(0, 1);
+        PagedMap m = PagePack.mapOfKinds("x").withKind(0, 1).build();
         assertEq(m.entriesPerPage(), 64);
 
         // One- and two-slot entries, 25 of each: 50 tags and 75 of 78 data slots.
-        m = m.withKind(1, 2);
+        m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 2).build();
         assertEq(m.entriesPerPage(), 50);
 
         // Four one-slot kinds fit as a map of one does.
-        m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 1).withKind(2, 1).withKind(3, 1);
+        m = PagePack.mapOfKinds("x")
+            .withKind(0, 1)
+            .withKind(1, 1)
+            .withKind(2, 1)
+            .withKind(3, 1)
+            .build();
         assertEq(m.entriesPerPage(), 64);
 
         // Too wide for one of each: as many of the widest as fit.
-        m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 127);
+        m = PagePack.mapOfKinds("x").withKind(0, 1).withKind(1, 127).build();
         assertEq(m.entriesPerPage(), 1);
 
-        m = PagePack.mapOfKinds("x").withKind(0, 60).withKind(1, 60).withKind(2, 60);
+        m = PagePack.mapOfKinds("x").withKind(0, 60).withKind(1, 60).withKind(2, 60).build();
         assertEq(m.entriesPerPage(), 2);
-
-        // A count set by hand stays as kinds are added, even one equal to the default so far.
-        m = PagePack.mapOfKinds("x").withEntriesPerPage(40).withKind(0, 1).withKind(1, 2);
-        assertEq(m.entriesPerPage(), 40);
-
-        m = PagePack.mapOfKinds("x").withKind(0, 1).withEntriesPerPage(64).withKind(1, 2);
-        assertEq(m.entriesPerPage(), 64);
-
-        // The order of the calls doesn't matter.
-        PagedMap other =
-            PagePack.mapOfKinds("x").withKind(1, 2).withKind(0, 1).withEntriesPerPage(64);
-        assertEq(PagedMap.unwrap(other), PagedMap.unwrap(m));
     }
 
     function test_invalidEntriesPerPageReverts() public {

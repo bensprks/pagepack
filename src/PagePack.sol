@@ -9,11 +9,15 @@ import {LibDirectory} from "./LibDirectory.sol";
 /// together into one map. Entries of different sizes can share a map made with {mapOfKinds}:
 /// the map lists each kind's size, and the top byte of a key names its kind.
 ///
-/// The low byte holds flags: whether the map keeps home flags for HOME hints, whether its keys
-/// carry a kind, and whether its entries per page were set by hand. The next byte holds the map's entries per page, and the eight bytes above
+/// The low byte holds flags: whether the map keeps home flags for HOME hints, and whether its
+/// keys carry a kind. The next byte holds the map's entries per page, and the eight bytes above
 /// it the size in slots of each kind, 0 for a kind the map doesn't have. A map of one kind keeps
-/// its size as kind 0's. The rest is a hash of the map's name.
+/// its size as kind 0's. The rest is 176 bits of a hash of the map's name.
 type PagedMap is bytes32;
+
+/// A map of several kinds while its kinds are being listed. {PagePack.mapOfKinds} starts one,
+/// {PagePack.withKind} adds to it and {PagePack.build} turns it into a PagedMap.
+type MapBuilder is bytes32;
 
 /// The first data slot of an entry, wherever the entry currently lives.
 ///
@@ -33,6 +37,10 @@ type PagedMap is bytes32;
 ///   Either way, measure the struct with a helper: in a `T[2] storage` array placed at slot 0,
 ///   element 1's slot is T's size in slots. Declare the helper `view`, not `pure`: the compiler
 ///   treats indexing a storage array as a possible read, though nothing is read.
+/// - In a map of several kinds, the top byte of a key picks the entry and its size. Build it
+///   from a constant and never from input: a caller who could set it would reach another kind's
+///   entry, and a struct wider than that entry would overwrite its neighbours. {kindKey} and
+///   {hashedKindKey} build keys that keep their input out of that byte.
 /// - They go stale when the map is rebalanced, even by a request that doesn't name the entry:
 ///   making room on a page can move the data of the entries staying on it. Look the entry up
 ///   again, and lay the struct over it again, after anything in the same transaction that could
@@ -44,6 +52,7 @@ type PagedMap is bytes32;
 type Entry is uint256;
 
 using PagePack for PagedMap global;
+using PagePack for MapBuilder global;
 using PagePack for Entry global;
 
 /// @title PagePack
@@ -116,6 +125,8 @@ library PagePack {
     error StructTooWide(uint256 slots, uint256 width);
     error InvalidKind(uint256 kind);
     error UnknownKind(uint256 kind);
+    error NoKinds();
+    error KeyTooLong(uint256 value);
     error IndexOutOfRange(uint256 index);
     error IndexTaken(uint256 index);
     error PageFull(uint256 page);
@@ -141,12 +152,11 @@ library PagePack {
     /// Kinds a map of several kinds can list, numbered from 0.
     uint256 internal constant MAX_KINDS = 8;
 
-    // The low byte of a map: a bit for maps that keep home flags, one for maps whose keys carry
-    // a kind, and one for maps whose entries per page were set by hand. The byte above holds the map's entries per page, and the eight above that
+    // The low byte of a map: a bit for maps that keep home flags, and one for maps whose keys
+    // carry a kind. The byte above holds the map's entries per page, and the eight above that
     // each kind's size.
     uint256 private constant HOME_HINTS = 0x80;
     uint256 private constant KINDED = 0x40;
-    uint256 private constant PER_PAGE_SET = 0x20;
     uint256 private constant PER_PAGE_SHIFT = 8;
     uint256 private constant PER_PAGE_BYTE = 0xff00;
     uint256 private constant SIZES_SHIFT = 16;
@@ -179,7 +189,7 @@ library PagePack {
     /// @dev Intended for an immutable: `PagedMap immutable BALANCES = PagePack.map("x", 1);`
     ///      Keys are any 32 bytes. For entries of several sizes, see {mapOfKinds}.
     function map(string memory name, uint256 slots) internal pure returns (PagedMap) {
-        return _withKind(_named(name, 0), 0, slots);
+        return _withKind(_named(name, 0), 0, slots).build();
     }
 
     /// @notice Like {map}, but packed entries leave a flag on their home page, so a HOME hint
@@ -189,52 +199,77 @@ library PagePack {
     ///      aren't packed and nothing else loads the directory. The choice is part of the map,
     ///      like its width: the two kinds of map never share storage.
     function mapWithHomeHints(string memory name, uint256 slots) internal pure returns (PagedMap) {
-        return _withKind(_named(name, HOME_HINTS), 0, slots);
+        return _withKind(_named(name, HOME_HINTS), 0, slots).build();
     }
 
-    /// @notice Creates a map for entries of several sizes. List each kind of entry and its size
-    ///         with {withKind}; the top byte of a key then names its kind:
+    /// @notice Starts a map for entries of several sizes. List each kind of entry and its size
+    ///         with {withKind}, then {build} the map. The top byte of a key names its kind:
     ///
     ///             PagePack.mapOfKinds("token.accounts")
     ///                 .withKind(APPROVAL, approvalSlots())
-    ///                 .withKind(ACCOUNT, accountSlots());
+    ///                 .withKind(ACCOUNT, accountSlots())
+    ///                 .build();
     ///
     /// @dev An entry's size comes from its key and the map, so lookups, hints and placements
     ///      never pass one. Keys are a kind in the top byte over 31 bytes of the caller's
-    ///      choosing; a key that needs more is hashed and cut to 31 bytes.
-    function mapOfKinds(string memory name) internal pure returns (PagedMap) {
+    ///      choosing: build them with {kindKey}, or {hashedKindKey} for a key that needs more.
+    ///
+    ///      A map lists at most 8 kinds, numbered 0 to 7, each 1 to 127 slots wide. Kinds of
+    ///      the same size can share a number and tell their keys apart in the next byte. The
+    ///      kinds are part of the map: a map with another list of them never shares storage
+    ///      with this one, so they can't change once the map holds entries.
+    function mapOfKinds(string memory name) internal pure returns (MapBuilder) {
         return _named(name, KINDED);
     }
 
     /// @notice Like {mapOfKinds}, keeping home flags for HOME hints. See {mapWithHomeHints}.
-    function mapOfKindsWithHomeHints(string memory name) internal pure returns (PagedMap) {
+    function mapOfKindsWithHomeHints(string memory name) internal pure returns (MapBuilder) {
         return _named(name, KINDED | HOME_HINTS);
     }
 
-    /// @notice Adds kind number `kind`, of entries `slots` slots wide, to a map made with
-    ///         {mapOfKinds}.
-    /// @dev Unless {withEntriesPerPage} set it, entries per page becomes the count that fits
-    ///      the kinds listed so far in equal numbers: 50 for kinds of one and two slots, 25 of
-    ///      each. Kinds can be listed in any order, before or after {withEntriesPerPage}.
-    ///      Reverts if the kind is above 7 or already listed, or the map wasn't made with
-    ///      {mapOfKinds}.
-    function withKind(PagedMap m, uint256 kind, uint256 slots) internal pure returns (PagedMap) {
-        uint256 handle = uint256(PagedMap.unwrap(m));
-
-        if (handle & KINDED == 0 || kind >= MAX_KINDS || slotsOf(m, kind) != 0) {
+    /// @notice Adds kind number `kind`, of entries `slots` slots wide. Kinds can be listed in
+    ///         any order.
+    /// @dev Reverts if the kind is above 7 or already listed.
+    function withKind(MapBuilder b, uint256 kind, uint256 slots)
+        internal
+        pure
+        returns (MapBuilder)
+    {
+        if (
+            kind >= MAX_KINDS
+                || (uint256(MapBuilder.unwrap(b)) >> (SIZES_SHIFT + 8 * kind)) & 0xff != 0
+        ) {
             revert InvalidKind(kind);
         }
 
-        return _withKind(m, kind, slots);
+        return _withKind(b, kind, slots);
     }
 
-    /// @notice Sets how many packed indices, and so tags, each page holds: 1 to 64. The page's
-    ///         other `128 - perPage` slots hold its entries' data.
+    /// @notice The map with the kinds listed. Reverts if there are none.
+    /// @dev Its entries per page is the count that fits its kinds in equal numbers: 50 for
+    ///      kinds of one and two slots, 25 of each. Kinds too wide to fit one of each get as
+    ///      many of the widest as fit. {withEntriesPerPage} sets another count.
+    function build(MapBuilder b) internal pure returns (PagedMap) {
+        uint256 handle = uint256(MapBuilder.unwrap(b));
+        (uint256 count, uint256 total, uint256 widest) = _kinds(handle);
+
+        if (count == 0) revert NoKinds();
+
+        // Whole groups of one entry of each kind, so the division rounds down first.
+        // forge-lint: disable-next-line(divide-before-multiply)
+        uint256 perPage = (PAGE_SIZE / total) * count;
+        if (perPage == 0) perPage = PAGE_SIZE / (widest + 1);
+
+        return PagedMap.wrap(bytes32(handle | (perPage << PER_PAGE_SHIFT)));
+    }
+
+    /// @notice The same map with `perPage` packed indices, and so tags, on each page: 1 to 64.
+    ///         The page's other `128 - perPage` slots hold its entries' data.
     /// @dev Pick it for the mix the planner packs, when the default doesn't suit: as many
     ///      entries as fit of a map's one size, or of each of its kinds in equal numbers. Every
     ///      size the map has must fit the data slots left. Part of the map, like its sizes: a
-    ///      map made with another value, or without one, never shares storage with this one,
-    ///      even if the value is the default.
+    ///      map with another count never shares storage with this one. Setting the default
+    ///      count changes nothing.
     function withEntriesPerPage(PagedMap m, uint256 perPage) internal pure returns (PagedMap) {
         uint256 handle = uint256(PagedMap.unwrap(m));
         (,, uint256 widest) = _kinds(handle);
@@ -243,30 +278,23 @@ library PagePack {
             revert InvalidEntriesPerPage(perPage);
         }
 
-        handle = (handle & ~PER_PAGE_BYTE) | (perPage << PER_PAGE_SHIFT) | PER_PAGE_SET;
-
-        return PagedMap.wrap(bytes32(handle));
+        return PagedMap.wrap(bytes32((handle & ~PER_PAGE_BYTE) | (perPage << PER_PAGE_SHIFT)));
     }
 
-    function _named(string memory name, uint256 flags) private pure returns (PagedMap) {
-        return PagedMap.wrap(bytes32((uint256(keccak256(bytes(name))) & ~HANDLE_FIELDS) | flags));
+    function _named(string memory name, uint256 flags) private pure returns (MapBuilder) {
+        return MapBuilder.wrap(bytes32((uint256(keccak256(bytes(name))) & ~HANDLE_FIELDS) | flags));
     }
 
-    /// Lists a kind's size. Entries per page follows the default for the kinds listed, unless
-    /// it was set by hand, in which case the new size has to fit.
-    function _withKind(PagedMap m, uint256 kind, uint256 slots) private pure returns (PagedMap) {
+    function _withKind(MapBuilder b, uint256 kind, uint256 slots)
+        private
+        pure
+        returns (MapBuilder)
+    {
         if (slots == 0 || slots > MAX_WIDTH) revert InvalidWidth(slots);
 
-        uint256 handle = uint256(PagedMap.unwrap(m)) | (slots << (SIZES_SHIFT + 8 * kind));
-
-        if (handle & PER_PAGE_SET != 0) {
-            uint256 perPage = (handle & PER_PAGE_BYTE) >> PER_PAGE_SHIFT;
-            if (slots > PAGE_SIZE - perPage) revert InvalidEntriesPerPage(perPage);
-        } else {
-            handle = (handle & ~PER_PAGE_BYTE) | (_defaultPerPage(handle) << PER_PAGE_SHIFT);
-        }
-
-        return PagedMap.wrap(bytes32(handle));
+        return MapBuilder.wrap(
+            bytes32(uint256(MapBuilder.unwrap(b)) | (slots << (SIZES_SHIFT + 8 * kind)))
+        );
     }
 
     /// How many kinds a handle lists, their sizes plus a tag each, and the widest.
@@ -285,18 +313,8 @@ library PagePack {
         }
     }
 
-    /// As many entries as fit on a page, each with its tag, taking the kinds in equal numbers.
-    /// Kinds too wide to fit one of each get as many of the widest as fit.
-    function _defaultPerPage(uint256 handle) private pure returns (uint256 perPage) {
-        (uint256 count, uint256 total, uint256 widest) = _kinds(handle);
-        if (count == 0) return 0;
-
-        perPage = (PAGE_SIZE / total) * count;
-        if (perPage == 0) perPage = PAGE_SIZE / (widest + 1);
-    }
-
     /// @notice Number of data slots in each entry of a map of one kind: its width. In a map of
-    ///         several kinds, kind 0's size.
+    ///         several kinds, kind 0's size, or 0 if it has no kind 0: see {slotsOf}.
     function width(PagedMap m) internal pure returns (uint256) {
         return slotsOf(m, 0);
     }
@@ -328,9 +346,48 @@ library PagePack {
     /// @dev For a map of one kind whose width is set by hand, such as one pinned to the size of
     ///      its largest struct: check each struct's size when creating the map. A narrower
     ///      struct leaves the rest of its entry unused; a wider one would write into the next
-    ///      packed entry. A map of several kinds takes each kind's size from its struct instead.
+    ///      packed entry. In a map of several kinds this checks kind 0 only: use
+    ///      {requireFits}(kind, slots).
     function requireFits(PagedMap m, uint256 slots) internal pure {
         if (slots > m.width()) revert StructTooWide(slots, m.width());
+    }
+
+    /// @notice Reverts unless a struct of `slots` slots fits within entries of `kind`, which
+    ///         also catches a kind the map doesn't list.
+    /// @dev For a map of several kinds whose sizes are set by hand. A map that takes each
+    ///      kind's size from its struct needs no check.
+    function requireFits(PagedMap m, uint256 kind, uint256 slots) internal pure {
+        if (slots > m.slotsOf(kind)) revert StructTooWide(slots, m.slotsOf(kind));
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Keys
+    // ------------------------------------------------------------------------------------------
+
+    /// @notice A key of `kind` for `value`: the kind in the top byte over the value, which must
+    ///         fit the 31 bytes below it.
+    /// @dev The kind picks the entry's size, so take it from a constant, the one given to
+    ///      {withKind}, and build keys here rather than by hand: a value that reached the top
+    ///      byte would name another kind's entry. Reverts if it would, and never cuts the value
+    ///      short, which would make two values share an entry. Hash a longer key and use
+    ///      {hashedKindKey}. Only the kind's low byte is used.
+    function kindKey(uint256 kind, uint256 value) internal pure returns (bytes32 key) {
+        if (value >> 248 != 0) revert KeyTooLong(value);
+
+        assembly ("memory-safe") {
+            key := or(shl(248, kind), value)
+        }
+    }
+
+    /// @notice A key of `kind` for a hash: the kind in the top byte over the hash's first 31
+    ///         bytes.
+    /// @dev For keys longer than 31 bytes, such as a pair of addresses. Two inputs share a key
+    ///      only if their hashes agree on 248 bits, which takes about 2^124 tries to find. Only
+    ///      the kind's low byte is used.
+    function hashedKindKey(uint256 kind, bytes32 hash) internal pure returns (bytes32 key) {
+        assembly ("memory-safe") {
+            key := or(shl(248, kind), shr(8, hash))
+        }
     }
 
     /// @notice Whether the map keeps home flags, so HOME hints work.
@@ -668,7 +725,7 @@ library PagePack {
         }
 
         // Every size a map lists fits its pages, so only a kind it doesn't list is rejected.
-        if (slots == 0) revert UnknownKind(uint8(bytes1(p.key)));
+        if (slots == 0) revert UnknownKind(uint256(p.key) >> 248);
         if (p.index == HOME) return (id, slots, false);
 
         if (p.index >= MAX_INDEX) revert IndexOutOfRange(p.index);
