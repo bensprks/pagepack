@@ -66,8 +66,8 @@ contract BalanceMapTest is Test {
 
     function _pack(address first, address second) internal {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(balanceKey(first), 0, 0);
-        placements[1] = PagePack.Placement(balanceKey(second), 0, 1);
+        placements[0] = PagePack.Placement(balanceKey(first), 0);
+        placements[1] = PagePack.Placement(balanceKey(second), 1);
 
         BALANCES.map().rebalance(placements);
     }

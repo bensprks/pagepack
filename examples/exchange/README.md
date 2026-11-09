@@ -84,10 +84,10 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 158,495 | 84,113 (-47%) | 76,473 (-52%) |
-| Re-quote 3 orders, one market | 106,006 | 76,954 (-27%) | 66,969 (-37%) |
-| Taker vs 3 makers | 206,535 | 129,945 (-37%) | 117,327 (-43%) |
-| Taker vs 14 makers | 706,264 | 342,197 (-52%) | 318,918 (-55%) |
+| Re-quote 1 order, maker in 6 markets | 158,495 | 81,653 (-48%) | 74,712 (-53%) |
+| Re-quote 3 orders, one market | 106,006 | 74,571 (-30%) | 66,332 (-37%) |
+| Taker vs 3 makers | 206,535 | 126,268 (-39%) | 116,113 (-44%) |
+| Taker vs 14 makers | 706,264 | 330,146 (-53%) | 314,800 (-55%) |
 
 | Operation | Mappings |
 | --- | ---: |
@@ -108,12 +108,12 @@ account; the others quote one market. The taker is a long-tail account and is no
 
   | Map name | pagepack |
   | --- | ---: |
-  | pagepack.exchange | 342,197 |
-  | pagepack.exchange.1 | 344,047 |
-  | pagepack.exchange.2 | 351,758 |
-  | pagepack.exchange.3 | 333,126 |
-  | pagepack.exchange.4 | 344,433 |
-  | pagepack.exchange.5 | 334,826 |
+  | pagepack.exchange | 330,146 |
+  | pagepack.exchange.1 | 341,795 |
+  | pagepack.exchange.2 | 333,722 |
+  | pagepack.exchange.3 | 339,517 |
+  | pagepack.exchange.4 | 333,507 |
+  | pagepack.exchange.5 | 340,758 |
 
   Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or

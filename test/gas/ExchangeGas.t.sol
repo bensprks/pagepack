@@ -416,7 +416,7 @@ contract ExchangeGasTest is Test {
         if (offset + keys.length > ENTRIES_PER_PAGE) next += ENTRIES_PER_PAGE - offset;
 
         for (uint256 i; i < keys.length; ++i) {
-            placements[count++] = PagePack.Placement(keys[i], 0, next++);
+            placements[count++] = PagePack.Placement(keys[i], next++);
         }
 
         return (count, next);

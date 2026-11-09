@@ -41,13 +41,12 @@ contract PagePackGasTest is Test {
         PagePack.Placement[] memory placements = new PagePack.Placement[](94 + FILLER);
 
         for (uint256 i; i < ENTRIES_PER_PAGE; ++i) {
-            placements[i] = PagePack.Placement(_key(i), 0, i);
+            placements[i] = PagePack.Placement(_key(i), i);
         }
 
         for (uint256 i; i < 30; ++i) {
             uint256 page = 4 + i / 10;
-            placements[64 + i] =
-                PagePack.Placement(_key(64 + i), 0, page * ENTRIES_PER_PAGE + i % 10);
+            placements[64 + i] = PagePack.Placement(_key(64 + i), page * ENTRIES_PER_PAGE + i % 10);
         }
 
         for (uint256 i; i < 94; ++i) {
@@ -60,7 +59,7 @@ contract PagePackGasTest is Test {
                 ++next;
             }
 
-            placements[94 + i] = PagePack.Placement(_filler(next++), 0, 7 * ENTRIES_PER_PAGE + i);
+            placements[94 + i] = PagePack.Placement(_filler(next++), 7 * ENTRIES_PER_PAGE + i);
         }
 
         packedBalances.pack(placements);

@@ -97,7 +97,7 @@ contract FootprintTest is Test {
         placements = new PagePack.Placement[](ENTRIES);
 
         for (uint256 i; i < ENTRIES; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
     }
 }

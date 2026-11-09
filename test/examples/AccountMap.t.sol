@@ -7,10 +7,8 @@ import {
     AccountMap,
     accountKey,
     accountMap,
-    accountPlacement,
     accountSlots,
     approvalKey,
-    approvalPlacement,
     approvalSlots
 } from "../../examples/accounts/AccountMap.sol";
 
@@ -34,20 +32,12 @@ contract Spender {
         ACCOUNTS.map().rebalance(placements);
     }
 
-    function accountHint(address owner) external view returns (PagePack.Hint memory) {
-        return ACCOUNTS.accountHint(owner);
+    function hintOf(bytes32 key) external view returns (uint256) {
+        return ACCOUNTS.map().hintOf(key);
     }
 
-    function approvalHint(address owner, address spender)
-        external
-        view
-        returns (PagePack.Hint memory)
-    {
-        return ACCOUNTS.approvalHint(owner, spender);
-    }
-
-    function slotOf(bytes32 key, uint256 slots) external view returns (uint256) {
-        return ACCOUNTS.map().sized(slots).find(key).slot();
+    function slotOf(bytes32 key) external view returns (uint256) {
+        return ACCOUNTS.map().find(key).slot();
     }
 
     function balanceOf(address owner) external view returns (uint256) {
@@ -72,7 +62,8 @@ contract AccountMapTest is Test {
 
         assertEq(accountSlots(), 2);
         assertEq(approvalSlots(), 1);
-        assertEq(m.width(), 1);
+        assertEq(m.sizeOf(accountKey(address(1))), 2);
+        assertEq(m.sizeOf(approvalKey(address(1), address(2))), 1);
         assertEq(m.entriesPerPage(), 50);
         assertEq(m.dataSlotsPerPage(), 78);
     }
@@ -86,17 +77,17 @@ contract AccountMapTest is Test {
             vm.prank(owners[i]);
             spender.fund(owners[i], 1_000 + i, uint128(100 + i));
 
-            placements[2 * i] = accountPlacement(owners[i], 2 * i);
-            placements[2 * i + 1] = approvalPlacement(owners[i], owners[i], 2 * i + 1);
+            placements[2 * i] = PagePack.Placement(accountKey(owners[i]), 2 * i);
+            placements[2 * i + 1] = PagePack.Placement(approvalKey(owners[i], owners[i]), 2 * i + 1);
         }
 
         spender.pack(placements);
 
-        uint256 page = spender.slotOf(accountKey(owners[0]), 2) >> 7;
+        uint256 page = spender.slotOf(accountKey(owners[0])) >> 7;
 
         for (uint256 i; i < owners.length; ++i) {
-            assertEq(spender.slotOf(accountKey(owners[i]), 2) >> 7, page);
-            assertEq(spender.slotOf(approvalKey(owners[i], owners[i]), 1) >> 7, page);
+            assertEq(spender.slotOf(accountKey(owners[i])) >> 7, page);
+            assertEq(spender.slotOf(approvalKey(owners[i], owners[i])) >> 7, page);
             assertEq(spender.balanceOf(owners[i]), 1_000 + i);
             assertEq(spender.allowance(owners[i], owners[i]), 100 + i);
         }
@@ -111,18 +102,17 @@ contract AccountMapTest is Test {
         spender.fund(owner, 1_000, 300);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = accountPlacement(owner, 0);
-        placements[1] = approvalPlacement(owner, other, 1);
+        placements[0] = PagePack.Placement(accountKey(owner), 0);
+        placements[1] = PagePack.Placement(approvalKey(owner, other), 1);
         spender.pack(placements);
 
+        // Both kinds' hints are plain indices.
         PagePack.Hint[] memory hints = new PagePack.Hint[](2);
-        hints[0] = spender.accountHint(owner);
-        hints[1] = spender.approvalHint(owner, other);
+        hints[0] = PagePack.Hint(accountKey(owner), spender.hintOf(accountKey(owner)));
+        hints[1] =
+            PagePack.Hint(approvalKey(owner, other), spender.hintOf(approvalKey(owner, other)));
 
-        // The account's hint carries its size; the approval's, at the map's own size, doesn't.
-        assertEq(hints[0].key, accountKey(owner));
-        assertEq(hints[0].hint, (2 << 11) | 1);
-        assertEq(hints[1].key, approvalKey(owner, other));
+        assertEq(hints[0].hint, 1);
         assertEq(hints[1].hint, 2);
 
         vm.record();
@@ -131,7 +121,7 @@ contract AccountMapTest is Test {
 
         // Every slot read is on the packed page: the hints spared both lookups the directory.
         (bytes32[] memory reads,) = vm.accesses(address(spender));
-        uint256 page = spender.slotOf(accountKey(owner), 2) >> 7;
+        uint256 page = spender.slotOf(accountKey(owner)) >> 7;
 
         for (uint256 i; i < reads.length; ++i) {
             assertEq(uint256(reads[i]) >> 7, page);
@@ -141,30 +131,36 @@ contract AccountMapTest is Test {
         assertEq(spender.allowance(owner, other), 200);
     }
 
-    /// Helpers take each kind's size from its struct, including when sending an entry home.
-    function test_placementsNameTheirKindsSize() public {
+    /// A placement names its entry by key alone, including when sending it home.
+    function test_placementsNeedNoSize() public {
         address owner = makeAddr("owner");
-
-        assertEq(accountPlacement(owner, 3).slots, accountSlots());
-        assertEq(approvalPlacement(owner, owner, 4).slots, approvalSlots());
 
         vm.prank(owner);
         spender.fund(owner, 1_000, 300);
 
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = accountPlacement(owner, 0);
-        placements[1] = approvalPlacement(owner, owner, 1);
+        placements[0] = PagePack.Placement(accountKey(owner), 0);
+        placements[1] = PagePack.Placement(approvalKey(owner, owner), 1);
         spender.pack(placements);
 
         placements = new PagePack.Placement[](1);
-        placements[0] = accountPlacement(owner, PagePack.HOME);
+        placements[0] = PagePack.Placement(accountKey(owner), PagePack.HOME);
         spender.pack(placements);
 
         // The account went home whole; the approval stayed packed.
-        assertEq(spender.accountHint(owner).hint, 0);
-        assertEq(spender.approvalHint(owner, owner).hint, 2);
+        assertEq(spender.hintOf(accountKey(owner)), 0);
+        assertEq(spender.hintOf(approvalKey(owner, owner)), 2);
         assertEq(spender.balanceOf(owner), 1_000);
         assertEq(spender.allowance(owner, owner), 300);
+    }
+
+    /// A key whose top byte names no kind of the map can't be packed.
+    function test_unknownKindCannotBePacked() public {
+        PagePack.Placement[] memory placements = new PagePack.Placement[](1);
+        placements[0] = PagePack.Placement(bytes32(uint256(7) << 248 | 1), 0);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.UnknownKind.selector, 7));
+        spender.pack(placements);
     }
 
     function _owners(uint256 count) internal returns (address[] memory owners) {

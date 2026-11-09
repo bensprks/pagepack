@@ -73,8 +73,8 @@ abstract contract RebalanceScaleGasTest is Test {
 
     function test_gas_swap() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(keys[0], 0, 1);
-        placements[1] = PagePack.Placement(keys[1], 0, 0);
+        placements[0] = PagePack.Placement(keys[0], 1);
+        placements[1] = PagePack.Placement(keys[1], 0);
 
         store.rebalance(placements);
         vm.snapshotGasLastCall(group(), "Swap two entries");
@@ -92,8 +92,8 @@ abstract contract RebalanceScaleGasTest is Test {
 
     function test_gas_replace() public {
         PagePack.Placement[] memory placements = new PagePack.Placement[](2);
-        placements[0] = PagePack.Placement(keys[0], 0, PagePack.HOME);
-        placements[1] = PagePack.Placement(keys[size()], 0, 0);
+        placements[0] = PagePack.Placement(keys[0], PagePack.HOME);
+        placements[1] = PagePack.Placement(keys[size()], 0);
 
         store.rebalance(placements);
         vm.snapshotGasLastCall(group(), "Replace one entry with another");
@@ -112,7 +112,7 @@ abstract contract RebalanceScaleGasTest is Test {
         placements = new PagePack.Placement[](size());
 
         for (uint256 i; i < placements.length; ++i) {
-            placements[i] = PagePack.Placement(keys[i], 0, i);
+            placements[i] = PagePack.Placement(keys[i], i);
         }
     }
 
@@ -122,7 +122,7 @@ abstract contract RebalanceScaleGasTest is Test {
         returns (PagePack.Placement[] memory placements)
     {
         placements = new PagePack.Placement[](1);
-        placements[0] = PagePack.Placement(key, 0, index);
+        placements[0] = PagePack.Placement(key, index);
     }
 }
 

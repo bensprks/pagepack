@@ -10,14 +10,14 @@ Updating existing one-slot balances in one transaction:
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,071 (+28%) | 34,846 (+4%) |
-| 2 entries | 45,321 | 45,997 (+1%) | 36,485 (-19%) |
-| 10 entries | 139,537 | 67,739 (-51%) | 49,705 (-64%) |
-| 30 entries | 375,029 | 127,596 (-66%) | 82,677 (-78%) |
-| 64 entries, a full page | 775,423 | 227,992 (-71%) | 138,787 (-82%) |
-| 30 entries, 3 pages | 375,029 | 149,747 (-60%) | 104,637 (-72%) |
-| 2 unpacked entries | 45,309 | 57,126 (+26%) | – |
-| 2 unpacked entries, home-hint map | 45,309 | 55,948 (+23%) | 47,079 (+4%) |
+| 1 entry | 33,556 | 43,053 (+28%) | 34,845 (+4%) |
+| 2 entries | 45,321 | 45,372 (+0%) | 36,461 (-20%) |
+| 10 entries | 139,537 | 65,758 (-53%) | 49,497 (-65%) |
+| 30 entries | 375,029 | 118,148 (-68%) | 82,009 (-78%) |
+| 64 entries, a full page | 775,423 | 207,884 (-73%) | 137,337 (-82%) |
+| 30 entries, 3 pages | 375,029 | 138,623 (-63%) | 103,969 (-72%) |
+| 2 unpacked entries | 45,309 | 56,532 (+25%) | – |
+| 2 unpacked entries, home-hint map | 45,309 | 57,090 (+26%) | 47,089 (+4%) |
 
 The saving grows with batch size. Without hints, single-entry writes and entries that were never
 packed cost more than a mapping, because finding an entry costs gas too. In a map that keeps home
@@ -30,8 +30,8 @@ percent more or less. Over 16 key sets, each with 494 entries packed:
 
 | Entries updated in one tx | No hint, mean | No hint, lowest | No hint, highest | Hinted, mean |
 | --- | ---: | ---: | ---: | ---: |
-| 10 entries | 68,879 | 65,919 | 71,581 | 49,703 |
-| 64 entries, a full page | 219,691 | 207,541 | 235,128 | 138,766 |
+| 10 entries | 68,132 | 66,270 | 70,384 | 49,496 |
+| 64 entries, a full page | 215,900 | 199,614 | 229,233 | 137,318 |
 
 Compare unhinted costs across versions or layouts by their mean. Hinted lookups skip the search,
 so their cost barely depends on the keys.
@@ -41,13 +41,13 @@ structs and approvals, with every packed entry hinted and the pagepack entries s
 
 | Accounts in one tx | Mappings | Two maps | One map, width 2 | One map of both sizes |
 | --- | ---: | ---: | ---: | ---: |
-| 10 accounts | 256,456 | 93,132 (-64%) | 84,315 (-67%) | 84,385 (-67%) |
-| 25 accounts | 607,711 | 166,002 (-73%) | 171,720 (-72%) | 161,095 (-73%) |
+| 10 accounts | 256,479 | 91,361 (-64%) | 80,071 (-69%) | 80,821 (-68%) |
+| 25 accounts | 607,734 | 161,591 (-73%) | 161,101 (-73%) | 152,176 (-75%) |
 
 A mapping keeps an account's two slots together but puts every account and approval on a page of
 its own. Two maps put accounts and approvals on pages of their own, so a spend always loads two.
 One map pinned to two slots wastes a slot per approval and holds 42 entries a page, so 25
-accounts and their approvals spill onto a second page. One map of both sizes, with 50 entries per
+accounts and their approvals spill onto a second page. One map of both kinds, with 50 entries per
 page, keeps them on one.
 
 ## Storage layout
@@ -90,33 +90,39 @@ A tag keeps 242 bits of the identity. Two keys whose identities share those bits
 to the same packed entry, and finding such a pair, for example among CREATE2 addresses an
 attacker controls, takes about 2^121 hashes.
 
-### Entry sizes
+### Kinds and sizes
 
-A map's width is the size of the entries it looks up by default, and sets how many tags a page
-has. `m.sized(slots)` returns a view of the same map for entries of another size. Lookups, hints
-and fingerprints work on a view as on the map, and every size shares the map's directory and
-pages.
+A map made with `map(name, slots)` holds entries of one size, its width, under keys of any 32
+bytes. A map made with `mapOfKinds(name)` holds up to eight kinds of entry, each with its own
+size:
 
-An entry's size is part of its identity: `keccak256(map, key)` hashes a handle that includes it.
-The same key looked up at two sizes names two entries, and a placement that names the wrong size
-moves an empty entry, never part of a real one.
+```solidity
+PagePack.mapOfKinds("token.accounts").withKind(APPROVAL, 1).withKind(ACCOUNT, 2);
+```
 
-By default a page has as many tags as entries of the map's width fit on it, each with its tag:
-64 for one-slot entries, 42 for two-slot. A map of several sizes can set its own count with
-`map(name, slots, perPage)`, from 1 to 64, to suit its mix. Each page then has `perPage` tags and
-`128 - perPage` data slots.
+The top byte of a key names its kind, over 31 bytes of the caller's choosing. So an entry's size
+follows from the map and the key, and nothing passes one: lookups, hints and placements name an
+entry by its key alone, and can't disagree about how big it is. `sizeOf(key)` returns it. A key
+whose kind the map doesn't list can't be packed: `rebalance` reverts with `UnknownKind(kind)`.
+
+By default a page has as many tags as entries fit on it, each with its tag, taking a map's kinds
+in equal numbers: 64 for one-slot entries, 42 for two-slot, and 50 for a map of one- and two-slot
+kinds, 25 of each. `withEntriesPerPage(perPage)` sets another count, from 1 to 64, for a mix the
+default doesn't suit. Each page then has `perPage` tags and `128 - perPage` data slots, and every
+kind must fit those.
 
 ### Storage schema
 
-The handle an entry's identity hashes holds the map's name, width, entries per page and
-home-hint mode, plus the entry's size. Together they are the map's storage schema. Change any of
-them and the entries they cover get new identities, with new homes and no packed index: the old
-entries stay in storage, unreachable, and the new ones read as zero.
+The handle an entry's identity hashes holds the map's name, its kinds' sizes, entries per page
+and home-hint mode. Together they are the map's storage schema. Change any of them and every
+entry in the map gets a new identity, with a new home and no packed index: the old entries stay
+in storage, unreachable, and the new ones read as zero.
 
-- Changing a map's name, width, entries per page or home-hint mode moves every entry in it.
-- Changing a struct's size, by adding or widening a field, moves every entry of that kind, and
-  every entry in the map if the map takes its width from that struct. A typed map measures sizes
-  from its structs, so any upgrade that changes a struct's layout does this.
+- Changing a map's name, entries per page or home-hint mode does this. So does setting entries
+  per page by hand where the default applied before, even to the same count.
+- So does adding a kind, or changing a struct's size by adding or widening a field. A typed map
+  measures sizes from its structs, so any upgrade that changes a struct's layout does this.
+- Giving an entry another kind changes its key, so it is another entry.
 
 Treat the schema as fixed once a map holds data. To change it, give the map a new name, such as
 `"vault.balances.v2"`, and migrate: read each entry through the old handle and write it through
@@ -158,9 +164,7 @@ them with `useHints`, which keeps them in transient storage so every lookup in t
 picks its hint up. `find(key, hint)` takes a single hint directly. `HOME` only works in maps made
 with `mapWithHomeHints`. Other maps ignore it.
 
-A hint from a view of another size than the map's own also holds that size, shifted left by 11
-bits, so one `useHints` list can carry hints for every size. Hints for entries of the map's own
-size are plain indices.
+Hints are the same for every kind, so one `useHints` list can carry them all.
 
 A lookup without a hint searches the directory again even for an entry found earlier in the
 call, so look an entry up once per call and pass its struct along, as long as nothing in between
@@ -204,10 +208,9 @@ which caps it at 12.
                packing or evicting rebuilds the directory once
 ```
 
-Each placement names an entry's key, its size and its new index, or `HOME` to send it home. Size 0
-means the size of the handle `rebalance` is called on: the map's own, or a view's from `sized`.
-The request describes which entry holds each index after the call, so its order doesn't change
-that.
+Each placement names an entry's key and its new index, or `HOME` to send it home. The entry's
+size is the map's width, or the size of the kind in the key's top byte. The request describes
+which entry holds each index after the call, so its order doesn't change that.
 
 pagepack picks where on the page each entry's data goes. It reads the tags of each page that
 receives entries, then gives each arriving entry the first gap that fits, in placement order, so
@@ -226,37 +229,37 @@ holds, mostly MIP-8's charge for new storage slots. Slots that are still zero co
 
 | Packing from home, 16 entries per call | Gas per entry |
 | --- | ---: |
-| 1-slot entries | 62,041 |
-| 3-slot entries | 98,043 |
-| 8-slot entries | 189,138 |
-| 8-slot entries, 1 slot set | 66,288 |
-| 1-slot entries, never written | 41,691 |
-| 1-slot entries, never written, home-hint map | 62,169 |
+| 1-slot entries | 61,931 |
+| 3-slot entries | 97,734 |
+| 8-slot entries | 188,752 |
+| 8-slot entries, 1 slot set | 65,902 |
+| 1-slot entries, never written | 41,581 |
+| 1-slot entries, never written, home-hint map | 61,952 |
 
 Filling a map of 1,016 one-slot entries takes about 58M gas, so split large migrations into
 transactions sized from the table above. Listing new entries in fingerprint order also skips a
 sort. After that, a rebalance costs what it changes. Swapping two entries on a page costs about
-62,000 gas at any size, since only their tags move. Moving an entry to another page also reads
+61,000 gas at any size, since only their tags move. Moving an entry to another page also reads
 that page's tags. Packing or evicting rebuilds the directory once per call, which grows with the
 number of packed entries. Evicting also pays 17,000 gas for the entry's home slot in a default
 map:
 
 | Operation (one-slot entries, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
 | --- | ---: | ---: | ---: |
-| Empty rebalance | 22,075 | 22,075 | 22,075 |
-| Swap two entries | 61,354 | 61,919 | 62,542 |
-| Move one entry | 112,306 | 112,306 | 120,405 |
-| Evict one entry | 95,331 | 152,651 | 218,270 |
-| Replace one entry with another | 141,003 | 207,602 | 268,249 |
-| Resubmit the whole layout | 187,179 | 1,333,427 | 2,626,743 |
+| Empty rebalance | 22,006 | 22,006 | 22,006 |
+| Swap two entries | 60,804 | 61,939 | 61,987 |
+| Move one entry | 111,968 | 112,533 | 120,651 |
+| Evict one entry | 95,534 | 157,469 | 228,237 |
+| Replace one entry with another | 139,677 | 200,784 | 270,608 |
+| Resubmit the whole layout | 173,769 | 1,227,057 | 2,415,793 |
 
 Sliding entries together costs about 2,000 gas per slot moved, and only the call that needs it
-pays. On a full page of a one-slot map, with two one-slot gaps apart:
+pays. On a full page of 64 tags and 64 data slots, with two one-slot gaps apart:
 
 | Operation | Gas |
 | --- | ---: |
-| Pack a 1-slot entry into a gap | 116,120 |
-| Pack a 2-slot entry, moving 62 slots | 254,432 |
+| Pack a 1-slot entry into a gap | 115,882 |
+| Pack a 2-slot entry, moving 62 slots | 254,113 |
 
 ### Why entries don't pack themselves
 
@@ -292,13 +295,14 @@ pagepack applies layouts. Choosing them happens offchain. What a planner needs t
 
 - **Capacity.** A map packs up to 1,016 entries, at indices below 1,024. The rest stay at home,
   a page each like mapping entries, and finding one still searches the directory unless it has a
-  `HOME` hint. A map of several sizes can fill its pages' data before their tags, which lowers
-  that limit: a one-slot map holding only four-slot entries packs 16 to a page, 256 in all.
+  `HOME` hint. A map of several kinds can fill its pages' data before their tags, which lowers
+  that limit: pages of 64 tags holding only four-slot entries pack 16 each, 256 in all.
 - **Page space.** Entries with the same `index / entriesPerPage()` share a page. A page fits a
   layout if the sizes of its entries add up to at most `dataSlotsPerPage()`. By default that is
   as many entries of the map's width as there are tags: 64 one-slot entries, 42 two-slot or 32
-  three-slot. In a map of several sizes, set entries per page for the mix you pack. Put fields
-  that are used together in one entry, and rarely used fields in a map of their own.
+  three-slot. A map of several kinds has room for the same number of each by default. If you
+  pack another mix, set entries per page for it. Put fields that are used together in one entry,
+  and rarely used fields in a map of their own.
 - **Fingerprint collisions.** Two entries with the same fingerprint can't both be packed. Among
   1,016 random keys there's an 11.6% chance some pair collides (3.1% at 512, 0.1% at 100). Check
   new placements with `fingerprintOf` and leave one of each pair at home. Otherwise `rebalance`
@@ -329,21 +333,31 @@ A typed map module, like [`BalanceMap.sol`](../examples/orderbook/BalanceMap.sol
   the fields you need in one statement and write the changed ones together, after any checks.
   Each extra field written still costs about 100 gas, where a hand-packed word is written once.
 
-### Typed maps of several sizes
+### Typed maps of several kinds
 
 A module holding kinds of different sizes, like
-[`AccountMap.sol`](../examples/accounts/AccountMap.sol), creates its map at the smallest kind's
-size and looks each kind up at its own struct's size with `sized`, so a struct always fits its
-entry:
+[`AccountMap.sol`](../examples/accounts/AccountMap.sol), lists each kind with its struct's size
+when it creates the map, and puts the kind in the top byte of each key, so a struct always fits
+its entry:
 
 ```solidity
+uint256 constant APPROVAL = 0;
+uint256 constant ACCOUNT = 1;
+
 function accountMap(string memory name) view returns (AccountMap) {
-    // Two-slot accounts with one-slot approvals, one each: 50 tags fit 25 of each on a page.
-    return AccountMap.wrap(PagedMap.unwrap(PagePack.map(name, approvalSlots(), 50)));
+    PagedMap entries = PagePack.mapOfKinds(name)
+        .withKind(APPROVAL, approvalSlots())
+        .withKind(ACCOUNT, accountSlots());
+
+    return AccountMap.wrap(PagedMap.unwrap(entries));
+}
+
+function accountKey(address owner) pure returns (bytes32) {
+    return bytes32((ACCOUNT << 248) | uint160(owner));
 }
 
 function account(AccountMap entries, address owner) view returns (Account storage entry) {
-    Entry e = entries.map().sized(accountSlots()).find(accountKey(owner));
+    Entry e = entries.map().find(accountKey(owner));
 
     assembly ("memory-safe") {
         entry.slot := e
@@ -353,28 +367,17 @@ function account(AccountMap entries, address owner) view returns (Account storag
 
 Integrators' code is the same as for a map of one kind: `ACCOUNTS.account(owner).balance`.
 
-`sized` costs a few opcodes per lookup and reverts if a struct grows past a page's data region.
+Use the same constant for a kind in `withKind` and in its key, as above: that is what ties a
+struct to its entry's size. A key longer than 31 bytes, like an approval's owner and spender, is
+hashed and cut to 31.
 
-A placement's size is part of the entry it names: a wrong size names another, usually empty,
-entry and leaves the intended one where it is. Give the module a placement and a hint helper per
-kind, so code that drives the layout never handles a size:
+Code that drives the layout names entries by key alone, with the module's key functions:
+`PagePack.Placement(accountKey(owner), index)` and
+`PagePack.Hint(key, ACCOUNTS.map().hintOf(key))`. The contract loads every kind's hints with one
+`useHints` call.
 
-```solidity
-function accountPlacement(address owner, uint256 index) view returns (PagePack.Placement memory) {
-    return PagePack.Placement(accountKey(owner), accountSlots(), index);
-}
-
-function accountHint(AccountMap entries, address owner) view returns (PagePack.Hint memory) {
-    bytes32 key = accountKey(owner);
-    return PagePack.Hint(key, entries.map().sized(accountSlots()).hintOf(key));
-}
-```
-
-Hints from a view carry their size, so the contract loads every kind's hints with one `useHints`
-call on the map.
-
-A map whose kinds all have the same size, like the exchange's, can instead pin its width and
-check each struct against it with `requireFits` when it is created.
+A map whose kinds all have the same size, like the exchange's, can instead pin its width with
+`map(name, slots)` and check each struct against it with `requireFits` when it is created.
 
 ## Using `PagedMap` directly
 
@@ -392,5 +395,5 @@ function credit(bytes32 key, uint256 amount) internal {
 }
 ```
 
-`read` and `write` offsets must stay below the size the entry was looked up at: the map's width,
-or the size passed to `sized`.
+`read` and `write` offsets must stay below the entry's size: the map's width, or `sizeOf(key)`
+in a map of several kinds.

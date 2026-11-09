@@ -4,20 +4,11 @@ pragma solidity ^0.8.24;
 import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 
 /// Exposes PagePack over a single map so tests can drive it through external calls.
-contract EntryStore {
+abstract contract EntryStoreBase {
     PagedMap public immutable MAP;
 
-    /// @param perPage Entries per page, or 0 for the default.
-    constructor(uint256 slots, uint256 perPage, bool homeHints) {
-        if (perPage == 0) {
-            MAP = homeHints
-                ? PagePack.mapWithHomeHints("pagepack.test", slots)
-                : PagePack.map("pagepack.test", slots);
-        } else {
-            MAP = homeHints
-                ? PagePack.mapWithHomeHints("pagepack.test", slots, perPage)
-                : PagePack.map("pagepack.test", slots, perPage);
-        }
+    constructor(PagedMap map_) {
+        MAP = map_;
     }
 
     function get(bytes32 key, uint256 offset) external view returns (uint256) {
@@ -78,78 +69,39 @@ contract EntryStore {
         return MAP.dataSlotsPerPage();
     }
 
-    // Entries of another size than the map's own, through a view.
-
-    function sized(uint256 slots) external view returns (PagedMap) {
-        return MAP.sized(slots);
-    }
-
-    function get(bytes32 key, uint256 slots, uint256 offset, uint256 hint)
-        external
-        view
-        returns (uint256)
-    {
-        return MAP.sized(slots).find(key, hint).read(offset);
-    }
-
-    function setSized(bytes32 key, uint256 slots, uint256 offset, uint256 value) external {
-        MAP.sized(slots).find(key).write(offset, value);
-    }
-
-    function slotOfSized(bytes32 key, uint256 slots) external view returns (uint256) {
-        return MAP.sized(slots).find(key).slot();
-    }
-
-    function slotOfSized(bytes32 key, uint256 slots, uint256 hint) external view returns (uint256) {
-        return MAP.sized(slots).find(key, hint).slot();
-    }
-
-    /// Loads hints through the map, then looks `key` up at `slots` without one, in one call.
-    function slotOfSizedWithHints(PagePack.Hint[] calldata hints, bytes32 key, uint256 slots)
-        external
-        returns (uint256)
-    {
-        MAP.useHints(hints);
-        return MAP.sized(slots).find(key).slot();
-    }
-
-    function hintOfSized(bytes32 key, uint256 slots) external view returns (uint256) {
-        return MAP.sized(slots).hintOf(key);
-    }
-
-    function fingerprintOfSized(bytes32 key, uint256 slots) external view returns (uint256) {
-        return MAP.sized(slots).fingerprintOf(key);
+    function sizeOf(bytes32 key) external view returns (uint256) {
+        return MAP.sizeOf(key);
     }
 }
 
-/// An EntryStore that also rebalances through views. Kept apart so the benchmarks' store keeps
-/// its bytecode, and so its gas.
-contract SizedEntryStore is EntryStore {
+/// A map of one kind, `slots` wide.
+contract EntryStore is EntryStoreBase {
+    /// @param perPage Entries per page, or 0 for the default.
     constructor(uint256 slots, uint256 perPage, bool homeHints)
-        EntryStore(slots, perPage, homeHints)
+        EntryStoreBase(_mapOfOneKind(slots, perPage, homeHints))
+    {}
+}
+
+/// A map of several kinds: kind `i` is `sizes[i]` slots wide, and a key's top byte names its
+/// kind. Kept apart so the benchmarks' store keeps its bytecode, and so its gas.
+contract KindedEntryStore is EntryStoreBase {
+    /// @param perPage Entries per page, or 0 for the default.
+    constructor(uint256[] memory sizes, uint256 perPage, bool homeHints)
+        EntryStoreBase(_mapOfKinds(sizes, perPage, homeHints))
     {}
 
-    /// Rebalances through a view of `slots`, so placements of size 0 take that size.
-    function rebalanceSized(uint256 slots, PagePack.Placement[] memory placements) external {
-        MAP.sized(slots).rebalance(placements);
-    }
-
     /// Every data slot of the entry, found with `hint`.
-    function readAll(bytes32 key, uint256 slots, uint256 hint)
-        external
-        view
-        returns (uint256[] memory data)
-    {
-        return _readAll(MAP.sized(slots).find(key, hint), slots);
+    function readAll(bytes32 key, uint256 hint) external view returns (uint256[] memory data) {
+        return _readAll(MAP.find(key, hint), MAP.sizeOf(key));
     }
 
     /// Every data slot of the entry, found after loading `hints`, all in one call.
-    function readAllWithHints(PagePack.Hint[] calldata hints, bytes32 key, uint256 slots)
+    function readAllWithHints(PagePack.Hint[] calldata hints, bytes32 key)
         external
         returns (uint256[] memory data)
     {
         MAP.useHints(hints);
-        return _readAll(MAP.sized(slots).find(key), slots);
+        return _readAll(MAP.find(key), MAP.sizeOf(key));
     }
 
     function _readAll(Entry e, uint256 slots) internal view returns (uint256[] memory data) {
@@ -159,4 +111,27 @@ contract SizedEntryStore is EntryStore {
             data[w] = e.read(w);
         }
     }
+}
+
+function _mapOfOneKind(uint256 slots, uint256 perPage, bool homeHints) pure returns (PagedMap m) {
+    m = homeHints
+        ? PagePack.mapWithHomeHints("pagepack.test", slots)
+        : PagePack.map("pagepack.test", slots);
+
+    if (perPage != 0) m = m.withEntriesPerPage(perPage);
+}
+
+function _mapOfKinds(uint256[] memory sizes, uint256 perPage, bool homeHints)
+    pure
+    returns (PagedMap m)
+{
+    m = homeHints
+        ? PagePack.mapOfKindsWithHomeHints("pagepack.test")
+        : PagePack.mapOfKinds("pagepack.test");
+
+    for (uint256 kind; kind < sizes.length; ++kind) {
+        m = m.withKind(kind, sizes[kind]);
+    }
+
+    if (perPage != 0) m = m.withEntriesPerPage(perPage);
 }
