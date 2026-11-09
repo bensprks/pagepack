@@ -32,9 +32,11 @@ type PagedMap is bytes32;
 ///   Either way, measure the struct with a helper: in a `T[2] storage` array placed at slot 0,
 ///   element 1's slot is T's size in slots. Declare the helper `view`, not `pure`: the compiler
 ///   treats indexing a storage array as a possible read, though nothing is read.
-/// - They go stale when the entry moves. Look the entry up again, and lay the struct over it
-///   again, after anything in the same transaction that could rebalance, including an external
-///   call that might re-enter.
+/// - They go stale when the map is rebalanced, even by a request that doesn't name the entry:
+///   making room on a page can move the data of the entries staying on it. Look the entry up
+///   again, and lay the struct over it again, after anything in the same transaction that could
+///   rebalance, including an external call that might re-enter. If a callback could reach a
+///   function that rebalances, guard it and the functions holding entries with one lock.
 /// - Entries hold fixed-size values only. Mappings, dynamic arrays, strings and bytes keep their
 ///   contents at slots derived from the entry's location, so a move would leave them behind.
 ///   Keep such data in its own storage, keyed by the entry's key.
@@ -507,22 +509,25 @@ library PagePack {
 
     /// @notice Moves the named entries to new positions in one atomic step.
     /// @dev Each placement puts an entry at a packed index, or sends a packed entry home if its
-    ///      index is HOME. Entries that aren't named stay where they are. The request describes
-    ///      the layout after the call, so its order doesn't matter and swaps and cycles work: a
-    ///      placement may target an index whose entry is evicted or placed elsewhere in the same
-    ///      call. Placing an entry at the index it already holds does nothing, so a caller can
-    ///      resubmit a layout cheaply.
+    ///      index is HOME. Entries that aren't named keep their indices, and so their hints, but
+    ///      their data can move (see below): treat every rebalance as moving every entry in the
+    ///      map, and look entries up again after it. The request describes which entry holds
+    ///      each index after the call, so its order doesn't change that, and swaps and cycles
+    ///      work: a placement may target an index whose entry is evicted or placed elsewhere in
+    ///      the same call. Placing an entry at the index it already holds does nothing, so a
+    ///      caller can resubmit a layout cheaply.
     ///
     ///      A placement names the entry's size, or 0 for this handle's: the map's own, or a view's
     ///      from {sized}. Size is part of an entry's identity, so a wrong size names another
     ///      entry, usually an empty one at home, and leaves the intended one where it is.
     ///
     ///      The call picks each arriving entry's data slots: the first gap on the page that
-    ///      fits, in placement order. An entry moving to another index on the same page keeps
-    ///      its data where it is. If no gap fits but the page has enough free slots, the entries
-    ///      staying on the page are moved together first; their indices, and so their hints,
-    ///      don't change. A page fits a layout if the sizes of its entries add up to at most
-    ///      {dataSlotsPerPage}.
+    ///      fits, in placement order, so the order can change where data lands and what the call
+    ///      costs. An entry moving to another index on the same page keeps its data where it is.
+    ///      If no gap fits but the page has enough free slots, the data of the entries staying on
+    ///      the page is moved together first, though no request named them; their indices, and
+    ///      so their hints, don't change. A page fits a layout if the sizes of its entries add up
+    ///      to at most {dataSlotsPerPage}.
     ///
     ///      Reverts if a key is named twice at one size, an eviction names an entry that isn't
     ///      packed, two placements share an index, a placement targets an index held by an

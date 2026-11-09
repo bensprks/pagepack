@@ -176,14 +176,18 @@ which caps it at 12.
 ```
 
 Each placement names an entry's key, its size and its new index, or `HOME` to send it home. Size 0
-means the size of the handle `rebalance` is called on: the map's own, or a view's from `sized`. The request describes the layout after the call, so its order doesn't matter.
+means the size of the handle `rebalance` is called on: the map's own, or a view's from `sized`.
+The request describes which entry holds each index after the call, so its order doesn't change
+that.
 
 pagepack picks where on the page each entry's data goes. It reads the tags of each page that
-receives entries, then gives each arriving entry the first gap that fits, in placement order. An
-entry moving to another index on its own page keeps its data, so only its tag moves. If a page
-has enough free slots for an entry but no gap that fits, the entries staying on it slide
-together first. Their indices don't change, so their hints stay valid. If the page doesn't have
-enough free slots, `rebalance` reverts with `PageFull(page)`.
+receives entries, then gives each arriving entry the first gap that fits, in placement order, so
+the order can change where data lands and what the call costs. An entry moving to another index
+on its own page keeps its data, so only its tag moves. If a page has enough free slots for an
+entry but no gap that fits, the entries staying on it slide together first. Their indices don't
+change, so their hints stay valid, but their data moves although the request didn't name them.
+Treat every rebalance as moving every entry in the map: a contract must look entries up again
+after it. If the page doesn't have enough free slots, `rebalance` reverts with `PageFull(page)`.
 
 Because every old slot is cleared before any new one is written, moves within a page also avoid
 MIP-8's state-growth charge.

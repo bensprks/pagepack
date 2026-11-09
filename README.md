@@ -167,8 +167,10 @@ A struct from `find` is a raw storage pointer:
 - **Cast or bit-pack keys.** pagepack already hashes the key, so don't hash keys that fit in 32
   bytes. In a map of several kinds, include the kind in the key so keys of different kinds can't
   collide.
-- **Look entries up again after anything that could rebalance**, including an external call that
-  might re-enter.
+- **Look entries up again after any rebalance**, even one that doesn't name them: making room on
+  a page can move other entries' data. That includes an external call that might re-enter. If a
+  callback could reach your rebalance function, guard it and the functions holding entries with
+  one lock.
 
 ## Upgrades
 
