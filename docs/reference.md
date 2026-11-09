@@ -93,6 +93,22 @@ By default a page has as many tags as entries of the map's width fit on it, each
 `map(name, slots, perPage)`, from 1 to 64, to suit its mix. Each page then has `perPage` tags and
 `128 - perPage` data slots.
 
+### Storage schema
+
+The handle an entry's identity hashes holds the map's name, width, entries per page and
+home-hint mode, plus the entry's size. Together they are the map's storage schema. Change any of
+them and the entries they cover get new identities, with new homes and no packed index: the old
+entries stay in storage, unreachable, and the new ones read as zero.
+
+- Changing a map's name, width, entries per page or home-hint mode moves every entry in it.
+- Changing a struct's size, by adding or widening a field, moves every entry of that kind, and
+  every entry in the map if the map takes its width from that struct. A typed map measures sizes
+  from its structs, so any upgrade that changes a struct's layout does this.
+
+Treat the schema as fixed once a map holds data. To change it, give the map a new name, such as
+`"vault.balances.v2"`, and migrate: read each entry through the old handle and write it through
+the new one.
+
 ## Finding an entry
 
 ```
@@ -273,7 +289,11 @@ pagepack applies layouts. Choosing them happens offchain. What a planner needs t
 - **Fingerprint collisions.** Two entries with the same fingerprint can't both be packed. Among
   1,016 random keys there's an 11.6% chance some pair collides (3.1% at 512, 0.1% at 100). Check
   new placements with `fingerprintOf` and leave one of each pair at home. Otherwise `rebalance`
-  reverts with `FingerprintCollision(key)`.
+  reverts with `FingerprintCollision(key)`. Keys can also be chosen: anyone who controls keys,
+  such as addresses they create, can find one with a given fingerprint in about 2^22 hashes, to
+  keep a particular entry from being packed or to make an unchecked layout revert. A clash never
+  makes one entry read as another, since lookups check the tag. On a clash, pack whichever entry
+  saves more; one already packed has no claim to its fingerprint.
 - **Cost.** Packing costs about 42,000 gas per entry plus 18,000 to 20,000 per nonzero slot, so
   large migrations take several transactions. Packing or evicting rebuilds the directory once per
   call, which costs more as it fills. See [Rebalancing](#rebalancing) for the tables.
