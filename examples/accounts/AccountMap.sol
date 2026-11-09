@@ -12,9 +12,11 @@ import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 //     ACCOUNTS.approval(owner, spender).amount -= amount;
 //
 // The map is created at the smaller kind's size, and each getter looks its kind up at its own
-// struct's size, so a struct always fits its entry. Hints and rebalancing go through the
-// underlying map: placements name each kind's size, and a kind's hints come from its view,
-// `ACCOUNTS.map().sized(accountSlots()).hintOf(accountKey(owner))`.
+// struct's size, so a struct always fits its entry. Placements and hints come from a helper per
+// kind that names the kind's size, so code driving the layout never handles one:
+//
+//     ACCOUNTS.map().rebalance(placements); // from accountPlacement, approvalPlacement
+//     ACCOUNTS.map().useHints(hints);       // from ACCOUNTS.accountHint, ACCOUNTS.approvalHint
 
 /// Two slots.
 struct Account {
@@ -31,7 +33,7 @@ struct Approval {
 
 type AccountMap is bytes32;
 
-using {account, approval, map} for AccountMap global;
+using {account, accountHint, approval, approvalHint, map} for AccountMap global;
 
 /// Creates the map with 50 entries per page, room for 25 accounts and one approval each. At the
 /// default for one-slot entries, 64, the page's data would run out at 21 of each.
@@ -65,6 +67,38 @@ function approval(AccountMap entries, address owner, address spender)
 /// The underlying map, for hints and rebalancing.
 function map(AccountMap entries) pure returns (PagedMap) {
     return PagedMap.wrap(AccountMap.unwrap(entries));
+}
+
+// Placements and hints. A placement's size is part of the entry it names, so a wrong size would
+// name another, empty entry and leave the intended one where it is. These take each kind's size
+// from its struct.
+
+/// Puts the owner's account at packed `index`, or sends it home if `index` is `PagePack.HOME`.
+function accountPlacement(address owner, uint256 index) view returns (PagePack.Placement memory) {
+    return PagePack.Placement(accountKey(owner), accountSlots(), index);
+}
+
+/// Puts an approval at packed `index`, or sends it home if `index` is `PagePack.HOME`.
+function approvalPlacement(address owner, address spender, uint256 index)
+    view
+    returns (PagePack.Placement memory)
+{
+    return PagePack.Placement(approvalKey(owner, spender), approvalSlots(), index);
+}
+
+/// The account's hint for `useHints`, which carries its size. Meant for an eth_call wrapper.
+function accountHint(AccountMap entries, address owner) view returns (PagePack.Hint memory) {
+    bytes32 key = accountKey(owner);
+    return PagePack.Hint(key, entries.map().sized(accountSlots()).hintOf(key));
+}
+
+/// An approval's hint for `useHints`. Meant for an eth_call wrapper.
+function approvalHint(AccountMap entries, address owner, address spender)
+    view
+    returns (PagePack.Hint memory)
+{
+    bytes32 key = approvalKey(owner, spender);
+    return PagePack.Hint(key, entries.map().sized(approvalSlots()).hintOf(key));
 }
 
 // Keys. An address is its own key. Two addresses don't fit in 32 bytes, so an approval's key is

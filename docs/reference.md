@@ -317,8 +317,24 @@ function account(AccountMap entries, address owner) view returns (Account storag
 Integrators' code is the same as for a map of one kind: `ACCOUNTS.account(owner).balance`.
 
 `sized` costs a few opcodes per lookup and reverts if a struct grows past a page's data region.
-Placements name each kind's size, and `hintOf` on a view returns hints that carry it, so the
-contract can load every kind's hints with one `useHints` call on the map.
+
+A placement's size is part of the entry it names: a wrong size names another, usually empty,
+entry and leaves the intended one where it is. Give the module a placement and a hint helper per
+kind, so code that drives the layout never handles a size:
+
+```solidity
+function accountPlacement(address owner, uint256 index) view returns (PagePack.Placement memory) {
+    return PagePack.Placement(accountKey(owner), accountSlots(), index);
+}
+
+function accountHint(AccountMap entries, address owner) view returns (PagePack.Hint memory) {
+    bytes32 key = accountKey(owner);
+    return PagePack.Hint(key, entries.map().sized(accountSlots()).hintOf(key));
+}
+```
+
+Hints from a view carry their size, so the contract loads every kind's hints with one `useHints`
+call on the map.
 
 A map whose kinds all have the same size, like the exchange's, can instead pin its width and
 check each struct against it with `requireFits` when it is created.
