@@ -34,6 +34,18 @@ TABLES = [
         ],
     },
     {
+        "title": "Library: updating packed one-slot entries over 16 key sets",
+        "label": "Entries updated",
+        "columns": [
+            ("No hint, mean", "pagepack-key-sets"),
+            ("No hint, lowest", "pagepack-key-sets-lowest"),
+            ("No hint, highest", "pagepack-key-sets-highest"),
+            ("Hinted, mean", "pagepack-key-sets-hinted"),
+        ],
+        "percentages": False,
+        "rows": ["10 entries", "64 entries, a full page"],
+    },
+    {
         "title": "Library: directory search, page already loaded (1,024 searches each)",
         "label": "Directory and entry",
         "columns": [

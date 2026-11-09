@@ -24,6 +24,18 @@ packed cost more than a mapping, because finding an entry costs gas too. In a ma
 flags, a `HOME` hint brings an entry that was never packed within 4% of a mapping entry, at a
 [storage cost](#home-hints-or-compact-storage).
 
+The table uses one set of keys. Without a hint, a lookup searches the directory, and how many
+words it reads depends on the packed entries' fingerprints, so another key set can cost several
+percent more or less. Over 16 key sets, each with 494 entries packed:
+
+| Entries updated in one tx | No hint, mean | No hint, lowest | No hint, highest | Hinted, mean |
+| --- | ---: | ---: | ---: | ---: |
+| 10 entries | 68,879 | 65,919 | 71,581 | 49,703 |
+| 64 entries, a full page | 219,691 | 207,541 | 235,128 | 138,766 |
+
+Compare unhinted costs across versions or layouts by their mean. Hinted lookups skip the search,
+so their cost barely depends on the keys.
+
 Spending from two-slot accounts under one-slot approvals, every entry packed and hinted, with the
 accounts and approvals stored three ways:
 

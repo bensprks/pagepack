@@ -51,7 +51,8 @@ Updating existing one-slot balances in one transaction, from `make gas` on Monad
 A page holds 64 one-slot entries, not 128, because each packed entry also has a one-slot tag on
 the page. Entries that aren't packed cost more than in a regular mapping, because the lookup
 still searches the directory. In a map created with `mapWithHomeHints`, a `HOME` hint reduces this
-to +4% (see the [full table](docs/reference.md#results)).
+to +4% (see the [full table](docs/reference.md#results)). Costs without a hint also vary by a few
+percent with the keys, which the reference shows over 16 key sets.
 
 ## Usage
 
