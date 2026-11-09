@@ -41,8 +41,8 @@ structs and approvals, with every packed entry hinted and the pagepack entries s
 
 | Accounts in one tx | Mappings | Two maps | One map, width 2 | One map of both sizes |
 | --- | ---: | ---: | ---: | ---: |
-| 10 accounts | 256,479 | 91,361 (-64%) | 80,071 (-69%) | 80,821 (-68%) |
-| 25 accounts | 607,734 | 161,591 (-73%) | 161,101 (-73%) | 152,176 (-75%) |
+| 10 accounts | 256,479 | 91,361 (-64%) | 80,071 (-69%) | 81,271 (-68%) |
+| 25 accounts | 607,734 | 161,591 (-73%) | 161,101 (-73%) | 153,301 (-75%) |
 
 A mapping keeps an account's two slots together but puts every account and approval on a page of
 its own. Two maps put accounts and approvals on pages of their own, so a spend always loads two.
@@ -93,23 +93,36 @@ attacker controls, takes about 2^121 hashes.
 ### Kinds and sizes
 
 A map made with `map(name, slots)` holds entries of one size, its width, under keys of any 32
-bytes. A map made with `mapOfKinds(name)` holds up to eight kinds of entry, each with its own
-size:
+bytes. A map made with `mapOfKinds(name)` holds several kinds of entry, each with its own size:
 
 ```solidity
-PagePack.mapOfKinds("token.accounts").withKind(APPROVAL, 1).withKind(ACCOUNT, 2);
+PagePack.mapOfKinds("token.accounts").withKind(APPROVAL, 1).withKind(ACCOUNT, 2).build();
 ```
 
 The top byte of a key names its kind, over 31 bytes of the caller's choosing. So an entry's size
 follows from the map and the key, and nothing passes one: lookups, hints and placements name an
-entry by its key alone, and can't disagree about how big it is. `sizeOf(key)` returns it. A key
-whose kind the map doesn't list can't be packed: `rebalance` reverts with `UnknownKind(kind)`.
+entry by its key alone, and can't disagree about how big it is. `sizeOf(key)` returns it.
+
+Because that byte picks the entry and its size, it must come from a constant and never from
+input. A getter that ORs a caller's 32-byte id under its kind lets the caller set the byte, reach
+another kind's entry, and write a wider struct over that entry's neighbours. Build keys with
+`kindKey(kind, value)`, which reverts if the value doesn't fit in 31 bytes, or
+`hashedKindKey(kind, hash)`, which keeps a hash's first 31 bytes.
+
+Listing a kind decides whether its entries can be packed, not whether they can be used. A key
+whose kind the map doesn't list is read and written at its home like any entry that isn't
+packed, and `hintOf` answers for it, but `sizeOf` and `rebalance` revert with
+`UnknownKind(kind)`. To catch a kind left out of the list when the map is created, check it
+with `requireFits(kind, slots)`.
+
+A map lists at most eight kinds, numbered 0 to 7. Kinds of the same size can share a number and
+tell their keys apart in the next byte, so the limit is eight sizes, not eight entities.
 
 By default a page has as many tags as entries fit on it, each with its tag, taking a map's kinds
 in equal numbers: 64 for one-slot entries, 42 for two-slot, and 50 for a map of one- and two-slot
-kinds, 25 of each. `withEntriesPerPage(perPage)` sets another count, from 1 to 64, for a mix the
-default doesn't suit. Each page then has `perPage` tags and `128 - perPage` data slots, and every
-kind must fit those.
+kinds, 25 of each. `withEntriesPerPage(perPage)` on the built map sets another count, from 1 to
+64, for a mix the default doesn't suit. Each page then has `perPage` tags and `128 - perPage`
+data slots, and every kind must fit those.
 
 ### Storage schema
 
@@ -118,15 +131,34 @@ and home-hint mode. Together they are the map's storage schema. Change any of th
 entry in the map gets a new identity, with a new home and no packed index: the old entries stay
 in storage, unreachable, and the new ones read as zero.
 
-- Changing a map's name, entries per page or home-hint mode does this. So does setting entries
-  per page by hand where the default applied before, even to the same count.
-- So does adding a kind, or changing a struct's size by adding or widening a field. A typed map
-  measures sizes from its structs, so any upgrade that changes a struct's layout does this.
+- Changing a map's name, entries per page or home-hint mode does this.
+- So does adding a kind, which also changes the default entries per page, or changing a struct's
+  size by adding or widening a field. A typed map measures sizes from its structs, so any
+  upgrade that changes a struct's layout does this.
 - Giving an entry another kind changes its key, so it is another entry.
 
-Treat the schema as fixed once a map holds data. To change it, give the map a new name, such as
+pagepack doesn't support upgrades, so the schema is fixed once a map holds data: list every kind
+the map will need when it is created. To change it anyway, give the map a new name, such as
 `"vault.balances.v2"`, and migrate: read each entry through the old handle and write it through
 the new one.
+
+### Limits
+
+| Limit | Value |
+| --- | --- |
+| Packed entries per map | 1,016, at indices below 1,024. The rest stay at home |
+| Entry size | 1 to 127 slots, fixed-size fields only |
+| Entries per page | 1 to 64. A page's entries also have to fit its `128 - perPage` data slots |
+| Kinds per map | 8, numbered 0 to 7. Kinds of one size can share a number |
+| Keys | 32 bytes in a map of one kind. 31 bytes under the kind in a map of kinds |
+| Schema | Fixed once the map holds data. No upgrades or proxies |
+| Map name | Hashed to 176 bits |
+| Tag | 242 bits of an entry's identity |
+| Fingerprint | 22 bits. Two entries that share one can't both be packed |
+
+Two keys that resolve to one packed entry take about 2^121 hashes to find, and two hashed keys
+that agree on their 31 bytes about 2^124. Two map names that hash to the same 176 bits take about
+2^88, so name maps with constants, not with text a user supplies.
 
 ## Finding an entry
 
@@ -260,10 +292,10 @@ data slots, after some of its entries left:
 
 | Page before the call | Operation | Gas |
 | --- | --- | ---: |
-| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,882 |
-| | Pack a 2-slot entry, moving 62 slots | 254,113 |
-| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 158,819 |
-| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 386,271 |
+| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,785 |
+| | Pack a 2-slot entry, moving 62 slots | 254,016 |
+| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 161,992 |
+| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 386,506 |
 
 ### Why entries don't pack themselves
 
@@ -341,8 +373,8 @@ A typed map module, like [`BalanceMap.sol`](../examples/orderbook/BalanceMap.sol
 
 A module holding kinds of different sizes, like
 [`AccountMap.sol`](../examples/accounts/AccountMap.sol), lists each kind with its struct's size
-when it creates the map, and puts the kind in the top byte of each key, so a struct always fits
-its entry:
+when it creates the map, and builds each key with its kind in the top byte, so a struct always
+fits its entry:
 
 ```solidity
 uint256 constant APPROVAL = 0;
@@ -351,13 +383,18 @@ uint256 constant ACCOUNT = 1;
 function accountMap(string memory name) view returns (AccountMap) {
     PagedMap entries = PagePack.mapOfKinds(name)
         .withKind(APPROVAL, approvalSlots())
-        .withKind(ACCOUNT, accountSlots());
+        .withKind(ACCOUNT, accountSlots())
+        .build();
 
     return AccountMap.wrap(PagedMap.unwrap(entries));
 }
 
 function accountKey(address owner) pure returns (bytes32) {
-    return bytes32((ACCOUNT << 248) | uint160(owner));
+    return PagePack.kindKey(ACCOUNT, uint160(owner));
+}
+
+function approvalKey(address owner, address spender) pure returns (bytes32) {
+    return PagePack.hashedKindKey(APPROVAL, keccak256(abi.encode(owner, spender)));
 }
 
 function account(AccountMap entries, address owner) view returns (Account storage entry) {
@@ -371,9 +408,10 @@ function account(AccountMap entries, address owner) view returns (Account storag
 
 Integrators' code is the same as for a map of one kind: `ACCOUNTS.account(owner).balance`.
 
-Use the same constant for a kind in `withKind` and in its key, as above: that is what ties a
-struct to its entry's size. A key longer than 31 bytes, like an approval's owner and spender, is
-hashed and cut to 31.
+Use the same constant for a kind in `withKind` and in its key functions, as above: that is what
+ties a struct to its entry's size. Every getter builds its key through a key function, and no
+key function lets its input reach the top byte. A map whose sizes are set by hand, not taken
+from structs, checks each struct with `requireFits(kind, slots)` when it is created.
 
 Code that drives the layout names entries by key alone, with the module's key functions:
 `PagePack.Placement(accountKey(owner), index)` and
@@ -381,7 +419,9 @@ Code that drives the layout names entries by key alone, with the module's key fu
 `useHints` call.
 
 A map whose kinds all have the same size, like the exchange's, can instead pin its width with
-`map(name, slots)` and check each struct against it with `requireFits` when it is created.
+`map(name, slots)` and check each struct against it with `requireFits` when it is created. Its
+keys are any 32 bytes, so its kinds are only a convention, but the same rule holds for them:
+keep input out of the byte that tells kinds apart.
 
 ## Using `PagedMap` directly
 

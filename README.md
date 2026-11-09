@@ -167,16 +167,31 @@ A struct from `find` is a raw storage pointer:
   width for several structs checks each with `requireFits`.
 - **Cast or bit-pack keys.** pagepack already hashes the key, so don't hash keys that fit. In a
   map of several kinds, put the kind in the key's top byte so keys of different kinds can't
-  collide. A map made with `mapOfKinds` reads an entry's size from that byte, which leaves 31
-  bytes for the rest: hash a longer key and drop a byte.
+  collide.
+- **Never take a key's kind from input.** A map made with `mapOfKinds` reads an entry's size
+  from the key's top byte. If a caller can set that byte, they reach another kind's entry, and
+  a wider struct written through it overwrites the entries next to it. Build keys with
+  `kindKey(kind, value)`, which reverts unless the value fits the 31 bytes below, or
+  `hashedKindKey(kind, hash)` for longer keys.
 - **Keep the schema fixed.** A map's name, its kinds' sizes, entries per page and home-hint mode
-  are part of every entry's identity. Changing one after deployment leaves
+  are part of every entry's identity. Changing one, or adding a kind, after deployment leaves
   existing entries unreachable, so version the map's name and migrate instead. See
   [storage schema](docs/reference.md#storage-schema).
 - **Look entries up again after any rebalance**, even one that doesn't name them: making room on
   a page can move other entries' data. That includes an external call that might re-enter. If a
   callback could reach your rebalance function, guard it and the functions holding entries with
   one lock.
+
+## Limits
+
+- A map packs up to 1,016 entries. The rest stay at home, a page each.
+- An entry is 1 to 127 slots of fixed-size fields.
+- A page holds up to 64 entries, and fewer when they are wider than a slot.
+- A map of several kinds lists up to 8, numbered 0 to 7. Kinds of the same size can share a
+  number. Its keys are 31 bytes under the kind.
+- A map's kinds, sizes and entries per page are fixed once it holds data.
+
+The [reference](docs/reference.md#limits) has the full table and the margins behind it.
 
 ## Upgrades
 
