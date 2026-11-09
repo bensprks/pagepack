@@ -143,6 +143,15 @@ contract SizedEntryStore is EntryStore {
         return _readAll(MAP.sized(slots).find(key, hint), slots);
     }
 
+    /// Every data slot of the entry, found after loading `hints`, all in one call.
+    function readAllWithHints(PagePack.Hint[] calldata hints, bytes32 key, uint256 slots)
+        external
+        returns (uint256[] memory data)
+    {
+        MAP.useHints(hints);
+        return _readAll(MAP.sized(slots).find(key), slots);
+    }
+
     function _readAll(Entry e, uint256 slots) internal view returns (uint256[] memory data) {
         data = new uint256[](slots);
 

@@ -43,6 +43,10 @@ contract RebalanceHandler is Test {
     mapping(uint256 index => uint256 key) internal keyAt;
     mapping(uint256 key => mapping(uint256 offset => uint256)) internal values;
 
+    // Hints taken earlier, which later rebalances may have made stale.
+    uint256[MAX_KEYS] public savedHint;
+    bool[MAX_KEYS] public saved;
+
     uint256 public packed;
     uint256 public accepted;
     uint256 public rejected;
@@ -160,6 +164,47 @@ contract RebalanceHandler is Test {
         }
     }
 
+    /// On each of two or three pages, evicts every other entry narrower than the widest size,
+    /// then fills the page with the widest entries at home, all in one request. The evictions
+    /// leave gaps too small for the arrivals, so one call often has to make room on several
+    /// pages.
+    function packPages(uint256 seed) external {
+        (uint256 firstPage, uint256 count) = pages();
+        if (count < 2) return;
+
+        uint256 n = count == 2 ? 2 : 2 + seed % 2;
+        uint256 start = _random(seed, 0) % count;
+
+        uint256[] memory evicted = new uint256[](KEYS);
+        uint256[] memory placedKeys = new uint256[](KEYS);
+        uint256[] memory placedAt = new uint256[](KEYS);
+        uint256 evictions;
+        uint256 placements;
+
+        for (uint256 i; i < n; ++i) {
+            uint256 page = firstPage + (start + i) % count;
+            evictions = _thin(page, evicted, evictions);
+            uint256 used = _usedOn(page, evicted, evictions);
+
+            while (true) {
+                uint256 k = _widestHomeKey(_random(seed, 20 + placements), placedKeys, placements);
+                if (k == KEYS || used + slotsOf(k) > DATA_SLOTS) break;
+
+                uint256 rand = _random(seed, 30 + placements);
+                uint256 index = _freeIndexOn(page, rand, placedAt, placements);
+                if (index == type(uint256).max) break;
+
+                placedKeys[placements] = k;
+                placedAt[placements++] = index;
+                used += slotsOf(k);
+            }
+        }
+
+        if (evictions + placements != 0) {
+            _submit(evicted, evictions, placedKeys, placedAt, placements, seed);
+        }
+    }
+
     /// Evicts one or two packed entries, leaving gaps that later entries may not fit.
     function evict(uint256 a, uint256 b) external {
         if (packed == 0) return;
@@ -188,6 +233,13 @@ contract RebalanceHandler is Test {
         placedAt[1] = indexOf[first] - 1;
 
         _submit(new uint256[](0), 0, placedKeys, placedAt, 2, a);
+    }
+
+    /// Takes a key's current hint and keeps it while later rebalances make it stale.
+    function remember(uint256 k) external {
+        k %= KEYS;
+        savedHint[k] = store.hintOfSized(keys[k], slotsOf(k));
+        saved[k] = true;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -353,6 +405,65 @@ contract RebalanceHandler is Test {
         return FIRST + offset;
     }
 
+    /// Adds every other entry on `page` narrower than the widest size to `evicted`.
+    function _thin(uint256 page, uint256[] memory evicted, uint256 evictions)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 widest = _widest();
+        uint256 end = _min((page + 1) * PER_PAGE, FIRST + INDICES);
+        bool take;
+
+        for (uint256 index = _max(page * PER_PAGE, FIRST); index < end; ++index) {
+            uint256 occupant = keyAt[index];
+            if (occupant == 0 || slotsOf(occupant - 1) == widest) continue;
+
+            take = !take;
+            if (take) evicted[evictions++] = occupant - 1;
+        }
+
+        return evictions;
+    }
+
+    /// Data slots taken on `page` by the entries the model has there, less those in `evicted`.
+    function _usedOn(uint256 page, uint256[] memory evicted, uint256 evictions)
+        internal
+        view
+        returns (uint256 used)
+    {
+        uint256 end = _min((page + 1) * PER_PAGE, FIRST + INDICES);
+
+        for (uint256 index = _max(page * PER_PAGE, FIRST); index < end; ++index) {
+            uint256 occupant = keyAt[index];
+            if (occupant != 0 && !_contains(evicted, evictions, occupant - 1)) {
+                used += slotsOf(occupant - 1);
+            }
+        }
+    }
+
+    /// The widest key at home and not yet in the request, searching from `from`, or KEYS if
+    /// none is.
+    function _widestHomeKey(uint256 from, uint256[] memory listed, uint256 count)
+        internal
+        view
+        returns (uint256 best)
+    {
+        best = KEYS;
+
+        for (uint256 i; i < KEYS; ++i) {
+            uint256 k = (from + i) % KEYS;
+            if (indexOf[k] != 0 || _contains(listed, count, k)) continue;
+            if (best == KEYS || slotsOf(k) > slotsOf(best)) best = k;
+        }
+    }
+
+    function _widest() internal view returns (uint256 widest) {
+        for (uint256 i; i < sizes.length; ++i) {
+            if (sizes[i] > widest) widest = sizes[i];
+        }
+    }
+
     /// The first key from `k` that is at home and not yet in the request, or KEYS if none is.
     function _homeKey(uint256 k, uint256[] memory listed, uint256 count)
         internal
@@ -445,12 +556,14 @@ abstract contract RebalanceInvariantTest is Test {
             }
         }
 
-        bytes4[] memory selectors = new bytes4[](5);
+        bytes4[] memory selectors = new bytes4[](7);
         selectors[0] = RebalanceHandler.write.selector;
         selectors[1] = RebalanceHandler.rebalance.selector;
         selectors[2] = RebalanceHandler.swap.selector;
         selectors[3] = RebalanceHandler.pack.selector;
-        selectors[4] = RebalanceHandler.evict.selector;
+        selectors[4] = RebalanceHandler.packPages.selector;
+        selectors[5] = RebalanceHandler.evict.selector;
+        selectors[6] = RebalanceHandler.remember.selector;
 
         targetSelector(FuzzSelector(address(handler), selectors));
         targetContract(address(handler));
@@ -480,6 +593,34 @@ abstract contract RebalanceInvariantTest is Test {
             _assertHolds(k, store.readAll(key, slots, 0), "no hint");
             _assertHolds(k, store.readAll(key, slots, hint), "correct hint");
             _assertHolds(k, store.readAll(key, slots, PagePack.HOME), "HOME hint");
+        }
+    }
+
+    /// Hints taken before later rebalances still find their entries, passed to a lookup or
+    /// loaded with {PagePack.useHints}: a stale hint costs a search, never a wrong entry.
+    function invariant_savedHintsFindTheirEntries() public {
+        uint256 count;
+        for (uint256 k; k < handler.KEYS(); ++k) {
+            if (handler.saved(k)) ++count;
+        }
+
+        PagePack.Hint[] memory hints = new PagePack.Hint[](count);
+        count = 0;
+
+        for (uint256 k; k < handler.KEYS(); ++k) {
+            if (handler.saved(k)) {
+                hints[count++] = PagePack.Hint(handler.key(k), handler.savedHint(k));
+            }
+        }
+
+        for (uint256 k; k < handler.KEYS(); ++k) {
+            if (!handler.saved(k)) continue;
+
+            bytes32 key = handler.key(k);
+            uint256 slots = handler.slotsOf(k);
+
+            _assertHolds(k, store.readAll(key, slots, handler.savedHint(k)), "saved hint");
+            _assertHolds(k, store.readAllWithHints(hints, key, slots), "saved hints loaded");
         }
     }
 
