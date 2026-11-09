@@ -73,6 +73,8 @@ TABLES = [
             "Move a 3-slot entry within a page",
             "Pack a 1-slot entry into a gap",
             "Pack a 2-slot entry, moving 62 slots",
+            "Pack a 2-slot entry into a gap",
+            "Pack a 2-slot entry, moving 32 entries",
         ],
     },
     {
