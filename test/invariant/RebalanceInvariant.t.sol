@@ -3,38 +3,60 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack, PagedMap} from "pagepack/PagePack.sol";
-import {EntryStore} from "../utils/EntryStore.sol";
+import {SizedEntryStore} from "../utils/EntryStore.sol";
+
+/// A map's shape and the part of it a handler drives.
+struct Geometry {
+    // Tags per page, and the map's own size.
+    uint256 perPage;
+    uint256 width;
+    bool homeHints;
+    // Keys take turns being each of these sizes; the first is the map's own.
+    uint256[] sizes;
+    uint256 keys;
+    // The packed indices the handler uses: `indices` of them from `first`.
+    uint256 first;
+    uint256 indices;
+}
 
 /// Drives a store with random writes, rebalances and swaps, keeping a model of where every entry
-/// should be and what it should hold. Entries are one to four slots, so pages mix sizes and
-/// rebalancing has to find, and sometimes make, room. Rebalance requests are mostly valid, with
-/// some deliberately broken ones; the model decides independently which should succeed.
+/// should be and what it should hold. Keys take turns among several sizes, so pages mix sizes
+/// and rebalancing has to find, and sometimes make, room. Rebalance requests are mostly valid,
+/// with some deliberately broken ones; the model decides independently which should succeed.
 contract RebalanceHandler is Test {
-    uint256 public constant KEYS = 64;
-    uint256 public constant MAX_SLOTS = 4;
+    uint256 public constant MAX_KEYS = 64;
 
-    // A map of one-slot entries: 64 tags and 64 data slots per page. 100 indices spread over two
-    // packed pages and up to five directory words. Entries average 2.5 slots, so a page fills
-    // before its tags run out.
-    uint256 public constant PER_PAGE = 64;
-    uint256 public constant DATA_SLOTS = 64;
-    uint256 public constant INDICES = 100;
+    SizedEntryStore public immutable store;
 
-    EntryStore public immutable store;
-    bytes32[KEYS] internal keys;
+    uint256 public immutable PER_PAGE;
+    uint256 public immutable DATA_SLOTS;
+    uint256 public immutable KEYS;
+    uint256 public immutable FIRST;
+    uint256 public immutable INDICES;
+    uint256 public immutable WIDTH;
+
+    uint256[] internal sizes;
+    bytes32[MAX_KEYS] internal keys;
 
     // The model: each key's packed index plus one (0 at home), the reverse, and the data.
-    uint256[KEYS] public indexOf;
-    uint256[INDICES] internal keyAt;
-    uint256[MAX_SLOTS][KEYS] internal values;
+    uint256[MAX_KEYS] public indexOf;
+    mapping(uint256 index => uint256 key) internal keyAt;
+    mapping(uint256 key => mapping(uint256 offset => uint256)) internal values;
 
     uint256 public packed;
     uint256 public accepted;
     uint256 public rejected;
     uint256 public mismatches;
 
-    constructor(EntryStore store_) {
+    constructor(SizedEntryStore store_, Geometry memory geometry) {
         store = store_;
+        PER_PAGE = geometry.perPage;
+        DATA_SLOTS = 128 - geometry.perPage;
+        KEYS = geometry.keys;
+        FIRST = geometry.first;
+        INDICES = geometry.indices;
+        WIDTH = geometry.width;
+        sizes = geometry.sizes;
 
         for (uint256 i; i < KEYS; ++i) {
             keys[i] = keccak256(abi.encode("invariant", i));
@@ -53,9 +75,15 @@ contract RebalanceHandler is Test {
         return keyAt[index];
     }
 
-    /// Keys take turns being one, two, three and four slots.
-    function slotsOf(uint256 k) public pure returns (uint256) {
-        return 1 + k % MAX_SLOTS;
+    /// Keys take turns being each size.
+    function slotsOf(uint256 k) public view returns (uint256) {
+        return sizes[k % sizes.length];
+    }
+
+    /// The first page the handler uses, and how many.
+    function pages() public view returns (uint256 firstPage, uint256 count) {
+        firstPage = FIRST / PER_PAGE;
+        count = (FIRST + INDICES - 1) / PER_PAGE - firstPage + 1;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -106,8 +134,9 @@ contract RebalanceHandler is Test {
     /// Packs up to six entries from home at free indices on one page, so pages fill up and
     /// later requests have to find, or make, room. Valid unless the page is too full.
     function pack(uint256 seed) external {
+        (uint256 firstPage, uint256 pageCount) = pages();
+        uint256 page = firstPage + _random(seed, 0) % pageCount;
         uint256 count = 1 + seed % 6;
-        uint256 page = _random(seed, 0) % 2;
         uint256 k = _random(seed, 1) % KEYS;
 
         uint256[] memory placedKeys = new uint256[](count);
@@ -115,12 +144,11 @@ contract RebalanceHandler is Test {
         uint256 placements;
 
         for (uint256 i; i < count; ++i) {
-            for (uint256 tries; tries < KEYS && indexOf[k] != 0; ++tries) {
-                k = (k + 1) % KEYS;
-            }
+            k = _homeKey(k, placedKeys, placements);
+            if (k == KEYS) break;
 
             uint256 index = _freeIndexOn(page, _random(seed, 2 + i), placedAt, placements);
-            if (indexOf[k] != 0 || index == INDICES) break;
+            if (index == type(uint256).max) break;
 
             placedKeys[placements] = k;
             placedAt[placements++] = index;
@@ -200,10 +228,10 @@ contract RebalanceHandler is Test {
         }
     }
 
-    /// The size a request names for key `k`: its own, or sometimes 0 for a one-slot key, which
-    /// means the map's own size.
-    function _slots(uint256 k, uint256 seed, uint256 salt) internal pure returns (uint256) {
-        if (slotsOf(k) == 1 && _random(seed, 300 + salt) % 2 == 0) return 0;
+    /// The size a request names for key `k`: its own, or sometimes 0 for a key of the map's own
+    /// size, which means the same.
+    function _slots(uint256 k, uint256 seed, uint256 salt) internal view returns (uint256) {
+        if (slotsOf(k) == WIDTH && _random(seed, 300 + salt) % 2 == 0) return 0;
         return slotsOf(k);
     }
 
@@ -215,8 +243,8 @@ contract RebalanceHandler is Test {
         uint256[] memory placedAt,
         uint256 placements
     ) internal view returns (bool) {
-        bool[KEYS] memory named;
-        bool[INDICES] memory claimed;
+        bool[MAX_KEYS] memory named;
+        bool[] memory claimed = new bool[](INDICES);
 
         for (uint256 i; i < evictions; ++i) {
             uint256 k = evicted[i];
@@ -229,18 +257,15 @@ contract RebalanceHandler is Test {
             uint256 k = placedKeys[i];
             uint256 index = placedAt[i];
             if (named[k] || index >= PagePack.MAX_INDEX) return false;
-            if (index < INDICES && claimed[index]) return false;
+            if (_inRange(index) && claimed[index - FIRST]) return false;
 
             named[k] = true;
-            if (index < INDICES) claimed[index] = true;
+            if (_inRange(index)) claimed[index - FIRST] = true;
         }
 
         // Every target must be empty or held by an entry the request names.
         for (uint256 i; i < placements; ++i) {
-            uint256 index = placedAt[i];
-            if (index >= INDICES) continue;
-
-            uint256 occupant = keyAt[index];
+            uint256 occupant = keyAt[placedAt[i]];
             if (occupant != 0 && !named[occupant - 1]) return false;
         }
 
@@ -255,7 +280,7 @@ contract RebalanceHandler is Test {
         uint256[] memory placedAt,
         uint256 placements
     ) internal view returns (bool) {
-        uint256[KEYS] memory next = indexOf;
+        uint256[MAX_KEYS] memory next = indexOf;
 
         for (uint256 i; i < evictions; ++i) {
             next[evicted[i]] = 0;
@@ -265,12 +290,13 @@ contract RebalanceHandler is Test {
             next[placedKeys[i]] = placedAt[i] + 1;
         }
 
-        uint256[INDICES / PER_PAGE + 1] memory used;
+        (uint256 firstPage, uint256 count) = pages();
+        uint256[] memory used = new uint256[](count);
 
         for (uint256 k; k < KEYS; ++k) {
             if (next[k] == 0) continue;
 
-            uint256 page = (next[k] - 1) / PER_PAGE;
+            uint256 page = (next[k] - 1) / PER_PAGE - firstPage;
             used[page] += slotsOf(k);
             if (used[page] > DATA_SLOTS) return false;
         }
@@ -309,40 +335,66 @@ contract RebalanceHandler is Test {
         --packed;
     }
 
-    /// A free index half the time, otherwise any index, and rarely one out of range.
-    function _target(uint256 roll) internal view returns (uint256 index) {
-        if (roll % 97 == 0) return PagePack.MAX_INDEX;
-
-        index = (roll >> 8) % INDICES;
-        if ((roll >> 16) % 2 == 0) return index;
-
-        for (uint256 i; i < INDICES && keyAt[index] != 0; ++i) {
-            index = (index + 1) % INDICES;
-        }
+    function _inRange(uint256 index) internal view returns (bool) {
+        return index >= FIRST && index < FIRST + INDICES;
     }
 
-    /// A free index on `page` that the request doesn't already use, or INDICES if none is.
+    /// A free index half the time, otherwise any index in range, and rarely one out of range.
+    function _target(uint256 roll) internal view returns (uint256) {
+        if (roll % 97 == 0) return PagePack.MAX_INDEX;
+
+        uint256 offset = (roll >> 8) % INDICES;
+        if ((roll >> 16) % 2 == 0) return FIRST + offset;
+
+        for (uint256 i; i < INDICES && keyAt[FIRST + offset] != 0; ++i) {
+            offset = (offset + 1) % INDICES;
+        }
+
+        return FIRST + offset;
+    }
+
+    /// The first key from `k` that is at home and not yet in the request, or KEYS if none is.
+    function _homeKey(uint256 k, uint256[] memory listed, uint256 count)
+        internal
+        view
+        returns (uint256)
+    {
+        for (uint256 tries; tries < KEYS; ++tries) {
+            if (indexOf[k] == 0 && !_contains(listed, count, k)) return k;
+            k = (k + 1) % KEYS;
+        }
+
+        return KEYS;
+    }
+
+    /// A free index in range on `page` that the request doesn't already use, or the largest
+    /// uint256 if none is.
     function _freeIndexOn(uint256 page, uint256 rand, uint256[] memory used, uint256 count)
         internal
         view
         returns (uint256)
     {
-        uint256 first = page * PER_PAGE;
-        uint256 size = page == 0 ? PER_PAGE : INDICES - PER_PAGE;
+        uint256 first = _max(page * PER_PAGE, FIRST);
+        uint256 size = _min((page + 1) * PER_PAGE, FIRST + INDICES) - first;
 
         for (uint256 i; i < size; ++i) {
             uint256 index = first + (rand + i) % size;
-            if (keyAt[index] != 0) continue;
-
-            bool taken;
-            for (uint256 j; j < count; ++j) {
-                if (used[j] == index) taken = true;
-            }
-
-            if (!taken) return index;
+            if (keyAt[index] == 0 && !_contains(used, count, index)) return index;
         }
 
-        return INDICES;
+        return type(uint256).max;
+    }
+
+    function _contains(uint256[] memory list, uint256 count, uint256 value)
+        internal
+        pure
+        returns (bool)
+    {
+        for (uint256 i; i < count; ++i) {
+            if (list[i] == value) return true;
+        }
+
+        return false;
     }
 
     function _packedKey(uint256 seed) internal view returns (uint256 k) {
@@ -356,21 +408,34 @@ contract RebalanceHandler is Test {
     function _random(uint256 seed, uint256 salt) internal pure returns (uint256) {
         return uint256(keccak256(abi.encode(seed, salt)));
     }
+
+    function _min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
+    function _max(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a > b ? a : b;
+    }
 }
 
-/// Runs once per kind of map: with home flags and HOME hints, and without.
+/// Runs once per geometry: page shapes, entry sizes, index ranges and both kinds of map.
 abstract contract RebalanceInvariantTest is Test {
-    EntryStore internal store;
+    SizedEntryStore internal store;
     RebalanceHandler internal handler;
+    Geometry internal geometry;
 
-    function homeHints() internal pure virtual returns (bool);
+    function _geometry() internal pure virtual returns (Geometry memory);
 
     function setUp() public {
-        store = new EntryStore(1, 0, homeHints());
-        handler = new RebalanceHandler(store);
+        geometry = _geometry();
+        store = new SizedEntryStore(geometry.width, geometry.perPage, geometry.homeHints);
+        handler = new RebalanceHandler(store, geometry);
 
         assertEq(store.entriesPerPage(), handler.PER_PAGE());
         assertEq(store.dataSlotsPerPage(), handler.DATA_SLOTS());
+        assertEq(geometry.sizes[0], geometry.width);
+        assertLe(geometry.keys, handler.MAX_KEYS());
+        assertLe(geometry.first + geometry.indices, PagePack.MAX_INDEX);
 
         // The model assumes no two entries share a fingerprint, so any request it accepts is
         // valid.
@@ -406,19 +471,15 @@ abstract contract RebalanceInvariantTest is Test {
             uint256 slots = handler.slotsOf(k);
             uint256 index = handler.indexOf(k);
 
-            uint256 hint = index != 0 ? index : homeHints() ? PagePack.HOME : 0;
-            if (hint != 0 && slots != 1) hint |= slots << 11;
+            uint256 hint = index != 0 ? index : geometry.homeHints ? PagePack.HOME : 0;
+            if (hint != 0 && slots != geometry.width) hint |= slots << 11;
 
             assertEq(store.hintOfSized(key, slots), hint, "hint");
-            assertEq(_flag(k), index != 0 && homeHints() ? 1 : 0, "packed flag");
+            assertEq(_flag(k), index != 0 && geometry.homeHints ? 1 : 0, "packed flag");
 
-            for (uint256 w; w < slots; ++w) {
-                uint256 expected = handler.valueOf(k, w);
-
-                assertEq(store.get(key, slots, w, 0), expected, "no hint");
-                assertEq(store.get(key, slots, w, hint), expected, "correct hint");
-                assertEq(store.get(key, slots, w, PagePack.HOME), expected, "HOME hint");
-            }
+            _assertHolds(k, store.readAll(key, slots, 0), "no hint");
+            _assertHolds(k, store.readAll(key, slots, hint), "correct hint");
+            _assertHolds(k, store.readAll(key, slots, PagePack.HOME), "HOME hint");
         }
     }
 
@@ -428,10 +489,11 @@ abstract contract RebalanceInvariantTest is Test {
         uint256 handle = uint256(PagedMap.unwrap(store.MAP()));
         uint256 dir = uint256(keccak256(abi.encode(handle & ~uint256(0xff00)))) & ~uint256(127);
         uint256 perPage = handler.PER_PAGE();
+        uint256 first = handler.FIRST();
         uint256 used;
 
-        for (uint256 index; index < handler.INDICES(); ++index) {
-            if (index % perPage == 0) used = 0;
+        for (uint256 index = first; index < first + handler.INDICES(); ++index) {
+            if (index == first || index % perPage == 0) used = 0;
 
             uint256 start = dir + 128 * (index / perPage + 1);
             uint256 tag = uint256(vm.load(address(store), bytes32(start + index % perPage)));
@@ -456,6 +518,12 @@ abstract contract RebalanceInvariantTest is Test {
         }
     }
 
+    function _assertHolds(uint256 k, uint256[] memory data, string memory lookup) internal view {
+        for (uint256 w; w < data.length; ++w) {
+            assertEq(data[w], handler.valueOf(k, w), lookup);
+        }
+    }
+
     function _identity(uint256 k) internal view returns (uint256) {
         uint256 handle = uint256(PagedMap.unwrap(store.MAP())) & ~uint256(0xff00);
         handle |= handler.slotsOf(k) << 8;
@@ -471,20 +539,79 @@ abstract contract RebalanceInvariantTest is Test {
         uint256 home = _identity(k) & ~uint256(127);
         return uint256(vm.load(address(store), bytes32(home + 127)));
     }
-}
 
-/// forge-config: default.invariant.runs = 32
-/// forge-config: default.invariant.depth = 50
-contract RebalanceInvariantDefaultTest is RebalanceInvariantTest {
-    function homeHints() internal pure override returns (bool) {
-        return false;
+    function _sizes(uint256 a, uint256 b, uint256 c, uint256 d)
+        internal
+        pure
+        returns (uint256[] memory list)
+    {
+        list = new uint256[](4);
+        (list[0], list[1], list[2], list[3]) = (a, b, c, d);
     }
 }
 
+/// A one-slot map: 64 tags and 64 data slots per page, entries of one to four slots. 100
+/// indices spread over two packed pages and up to five directory words. Entries average 2.5
+/// slots, so a page fills before its tags run out.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantDefaultTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(64, 1, false, _sizes(1, 2, 3, 4), 64, 0, 100);
+    }
+}
+
+/// The same, keeping home flags for HOME hints.
 /// forge-config: default.invariant.runs = 32
 /// forge-config: default.invariant.depth = 50
 contract RebalanceInvariantHomeHintsTest is RebalanceInvariantTest {
-    function homeHints() internal pure override returns (bool) {
-        return true;
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(64, 1, true, _sizes(1, 2, 3, 4), 64, 0, 100);
+    }
+}
+
+/// One tag per page: every entry has a page to itself, up to the widest entry a page holds.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantOneTagTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(1, 1, false, _sizes(1, 50, 2, 127), 32, 0, 40);
+    }
+}
+
+/// Three tags per page and wide entries, so three of them rarely fit 125 data slots.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantThreeTagsTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(3, 1, true, _sizes(1, 20, 41, 62), 32, 0, 24);
+    }
+}
+
+/// The two-slot default of 42 tags, set by hand on a one-slot map of up to four slots: 86 data
+/// slots for entries averaging 2.5.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantFortyTwoTagsTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(42, 1, true, _sizes(1, 2, 3, 4), 64, 0, 100);
+    }
+}
+
+/// Accounts and approvals: 50 tags for one- and two-slot entries, and 78 data slots.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantFiftyTagsTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(50, 1, false, _sizes(1, 2, 1, 2), 64, 0, 150);
+    }
+}
+
+/// Wide entries at the last indices a map has, 1,000 to 1,023, on its last three pages.
+/// forge-config: default.invariant.runs = 32
+/// forge-config: default.invariant.depth = 50
+contract RebalanceInvariantHighIndicesTest is RebalanceInvariantTest {
+    function _geometry() internal pure override returns (Geometry memory) {
+        return Geometry(8, 8, true, _sizes(8, 16, 30, 40), 32, 1000, 24);
     }
 }

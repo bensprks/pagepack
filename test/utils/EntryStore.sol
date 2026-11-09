@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {PagePack, PagedMap} from "pagepack/PagePack.sol";
+import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 
 /// Exposes PagePack over a single map so tests can drive it through external calls.
 contract EntryStore {
@@ -132,5 +132,22 @@ contract SizedEntryStore is EntryStore {
     /// Rebalances through a view of `slots`, so placements of size 0 take that size.
     function rebalanceSized(uint256 slots, PagePack.Placement[] memory placements) external {
         MAP.sized(slots).rebalance(placements);
+    }
+
+    /// Every data slot of the entry, found with `hint`.
+    function readAll(bytes32 key, uint256 slots, uint256 hint)
+        external
+        view
+        returns (uint256[] memory data)
+    {
+        return _readAll(MAP.sized(slots).find(key, hint), slots);
+    }
+
+    function _readAll(Entry e, uint256 slots) internal view returns (uint256[] memory data) {
+        data = new uint256[](slots);
+
+        for (uint256 w; w < slots; ++w) {
+            data[w] = e.read(w);
+        }
     }
 }
