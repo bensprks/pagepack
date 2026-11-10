@@ -46,10 +46,13 @@ order, a new order overwrites a slot, and cancelled or filled slots keep a nonze
 over a nonzero word avoids MIP-8's 17,000 gas charge for growing state, so placing an order in a
 reused slot costs 20% less, with or without pagepack.
 
-**Hints.** Any call can carry `(key, hint)` pairs. The packed exchange hands them to pagepack's
-`useHints`, which keeps them in transient storage for the transaction, so the caller can pass
-them in any order and every lookup picks its hint up. A market maker or a settlement operator
-knows the layout and can always pass them; anyone else passes none.
+**Hints.** Any call can carry hints as `bytes`, 5 for each entry it touches. The caller gets
+them from the packed exchange's `hintsFor(keys)` in one `eth_call`, with keys from `ExchangeMap`.
+The exchange hands them to pagepack's `useHints`, which keeps them in transient storage for the
+transaction, so they can come in any order and every lookup picks its hint up. The exchange's
+lookups are spread through its margin checks and settlement, which is why it loads hints rather
+than passing one to each lookup. A market maker or a settlement operator knows the layout and
+can always pass them; anyone else passes none.
 
 The exchange's map keeps home flags (`mapWithHomeHints`). Takers are long-tail accounts that
 are never packed, and with a `HOME` hint for the taker a fully hinted settlement never loads the
@@ -84,15 +87,15 @@ account; the others quote one market. The taker is a long-tail account and is no
 
 | Operation | Mappings | pagepack | pagepack + hints |
 | --- | ---: | ---: | ---: |
-| Re-quote 1 order, maker in 6 markets | 158,495 | 81,653 (-48%) | 74,712 (-53%) |
-| Re-quote 3 orders, one market | 106,006 | 74,571 (-30%) | 66,332 (-37%) |
-| Taker vs 3 makers | 206,535 | 126,268 (-39%) | 116,113 (-44%) |
-| Taker vs 14 makers | 706,264 | 330,146 (-53%) | 314,800 (-55%) |
+| Re-quote 1 order, maker in 6 markets | 158,489 | 81,921 (-48%) | 66,195 (-58%) |
+| Re-quote 3 orders, one market | 106,000 | 74,719 (-30%) | 63,405 (-40%) |
+| Taker vs 3 makers | 206,506 | 126,587 (-39%) | 110,467 (-47%) |
+| Taker vs 14 makers | 706,235 | 330,960 (-53%) | 293,672 (-58%) |
 
 | Operation | Mappings |
 | --- | ---: |
-| New order in a never-used slot | 86,442 |
-| New order in a reused slot | 69,442 (-20%) |
+| New order in a never-used slot | 86,436 |
+| New order in a reused slot | 69,436 (-20%) |
 
 - **Re-quotes** are most of the traffic on Perpl. A maker in several markets saves the most,
   because its margin check reads a position and a market entry for every one of them.
@@ -108,12 +111,12 @@ account; the others quote one market. The taker is a long-tail account and is no
 
   | Map name | pagepack |
   | --- | ---: |
-  | pagepack.exchange | 330,146 |
-  | pagepack.exchange.1 | 341,795 |
-  | pagepack.exchange.2 | 333,722 |
-  | pagepack.exchange.3 | 339,517 |
-  | pagepack.exchange.4 | 333,507 |
-  | pagepack.exchange.5 | 340,758 |
+  | pagepack.exchange | 330,960 |
+  | pagepack.exchange.1 | 342,609 |
+  | pagepack.exchange.2 | 334,536 |
+  | pagepack.exchange.3 | 340,331 |
+  | pagepack.exchange.4 | 334,321 |
+  | pagepack.exchange.5 | 341,572 |
 
   Fully hinted calls never search the directory, so their cost doesn't vary.
 - **The model is smaller than a real exchange.** It has no order-book index, order locks or
@@ -130,4 +133,4 @@ The admin applies layouts chosen offchain from recent activity, e.g. daily:
    entry on one page. Entries with the same `index / entriesPerPage()` share a page (64 here).
 3. Call `rebalance(placements)` with only the entries that change, placing evicted ones at
    `PagePack.HOME`. It applies as one step, so a layout can swap entries directly. Old hints
-   keep working, without the saving, until callers refresh them with `hintOf`.
+   keep working, without the saving, until callers refresh them with `hintsFor`.

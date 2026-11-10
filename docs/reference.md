@@ -6,22 +6,25 @@ schedule.
 
 ## Results
 
-Updating existing one-slot balances in one transaction:
+Updating existing one-slot balances in one transaction. Each figure is the whole transaction's
+gas, so it includes the calldata that carries the keys and the hints. Hinted transactions send 5
+bytes per entry and load them with `useHints`. [Hint styles](#hint-styles) compares that with
+passing each lookup its hint:
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,053 (+28%) | 34,845 (+4%) |
-| 2 entries | 45,321 | 45,372 (+0%) | 36,461 (-20%) |
-| 10 entries | 139,537 | 65,758 (-53%) | 49,497 (-65%) |
-| 30 entries | 375,029 | 118,148 (-68%) | 82,009 (-78%) |
-| 64 entries, a full page | 775,423 | 207,884 (-73%) | 137,337 (-82%) |
-| 30 entries, 3 pages | 375,029 | 138,623 (-63%) | 103,969 (-72%) |
-| 2 unpacked entries | 45,309 | 56,532 (+25%) | – |
-| 2 unpacked entries, home-hint map | 45,309 | 57,090 (+26%) | 47,089 (+4%) |
+| 1 entry | 33,556 | 43,046 (+28%) | 35,245 (+5%) |
+| 2 entries | 45,321 | 45,380 (+0%) | 37,038 (-18%) |
+| 10 entries | 139,537 | 65,886 (-53%) | 51,690 (-63%) |
+| 30 entries | 375,029 | 118,576 (-68%) | 88,186 (-76%) |
+| 64 entries, a full page | 775,423 | 208,822 (-73%) | 150,364 (-81%) |
+| 30 entries, 3 pages | 375,029 | 139,051 (-63%) | 109,774 (-71%) |
+| 2 unpacked entries | 45,309 | 56,540 (+25%) | – |
+| 2 unpacked entries, home-hint map | 45,309 | 57,098 (+26%) | 47,814 (+6%) |
 
 The saving grows with batch size. Without hints, single-entry writes and entries that were never
 packed cost more than a mapping, because finding an entry costs gas too. In a map that keeps home
-flags, a `HOME` hint brings an entry that was never packed within 4% of a mapping entry, at a
+flags, a `HOME` hint brings an entry that was never packed within 6% of a mapping entry, at a
 [storage cost](#home-hints-or-compact-storage).
 
 The table uses one set of keys. Without a hint, a lookup searches the directory, and how many
@@ -30,19 +33,20 @@ percent more or less. Over 16 key sets, each with 494 entries packed:
 
 | Entries updated in one tx | No hint, mean | No hint, lowest | No hint, highest | Hinted, mean |
 | --- | ---: | ---: | ---: | ---: |
-| 10 entries | 68,132 | 66,270 | 70,384 | 49,496 |
-| 64 entries, a full page | 215,900 | 199,614 | 229,233 | 137,318 |
+| 10 entries | 68,260 | 66,398 | 70,512 | 51,663 |
+| 64 entries, a full page | 216,838 | 200,552 | 230,171 | 150,376 |
 
 Compare unhinted costs across versions or layouts by their mean. Hinted lookups skip the search,
 so their cost barely depends on the keys.
 
 Spending from two-slot accounts under one-slot approvals, against Solidity mappings of account
-structs and approvals, with every packed entry hinted and the pagepack entries stored three ways:
+structs and approvals, with a hint loaded for every packed entry and the pagepack entries stored
+three ways:
 
 | Accounts in one tx | Mappings | Two maps | One map, width 2 | One map of both sizes |
 | --- | ---: | ---: | ---: | ---: |
-| 10 accounts | 256,479 | 91,361 (-64%) | 80,071 (-69%) | 81,271 (-68%) |
-| 25 accounts | 607,734 | 161,591 (-73%) | 161,101 (-73%) | 153,301 (-75%) |
+| 10 accounts | 256,407 | 79,579 (-69%) | 68,255 (-73%) | 69,513 (-73%) |
+| 25 accounts | 607,662 | 131,781 (-78%) | 131,365 (-78%) | 123,578 (-80%) |
 
 A mapping keeps an account's two slots together but puts every account and approval on a page of
 its own. Two maps put accounts and approvals on pages of their own, so a spend always loads two.
@@ -155,6 +159,8 @@ the new one.
 | Map name | Hashed to 176 bits |
 | Tag | 242 bits of an entry's identity |
 | Fingerprint | 22 bits. Two entries that share one can't both be packed |
+| Hint | 11 bits: a packed index plus one, or `HOME`, 1,025 |
+| Hint in calldata | 5 bytes loaded with `useHints`, or 2 bytes passed to a lookup with `hintAt` |
 
 Two keys that resolve to one packed entry take about 2^121 hashes to find, and two hashed keys
 that agree on their 31 bytes about 2^124. Two map names that hash to the same 176 bits take about
@@ -190,13 +196,12 @@ that agree on their 31 bytes about 2^124. Two map names that hash to the same 17
                                      packed      home
 ```
 
-A hint is a packed entry's index plus one, or `HOME` for an entry that isn't packed. An
-offchain caller gets a batch's hints from `hintOf(key)` in one `eth_call`. The contract loads
-them with `useHints`, which keeps them in transient storage so every lookup in the transaction
-picks its hint up. `find(key, hint)` takes a single hint directly. `HOME` only works in maps made
-with `mapWithHomeHints`. Other maps ignore it.
-
-Hints are the same for every kind, so one `useHints` list can carry them all.
+A hint is a packed entry's index plus one, or `HOME` for an entry that isn't packed. `HOME` only
+works in maps made with `mapWithHomeHints`. Other maps ignore it. `hintOf(key)` returns an
+entry's hint, or 0 if there is none to give. Hints are the same for every kind. A lookup checks
+every hint, against the entry's tag or, for `HOME`, its home flag, so a wrong or stale hint
+costs gas but never returns the wrong entry. [Hint styles](#hint-styles) covers the two ways a
+hint reaches a lookup, and what each costs.
 
 A lookup without a hint searches the directory again even for an entry found earlier in the
 call, so look an entry up once per call and pass its struct along, as long as nothing in between
@@ -220,6 +225,55 @@ directories, with the page already loaded:
 Probes are the directory words read after the count. Fingerprints chosen to defeat the guess, as
 keys ground to be packed could be, make the search fall back to bisection after five probes,
 which caps it at 12.
+
+### Hint styles
+
+A contract takes hints in one of two ways:
+
+- **Loaded with `useHints`.** The caller sends one `bytes` argument, 5 bytes for each entry, and
+  the contract loads it once, usually in a modifier. Every `find(key)` in the transaction then
+  picks its hint up from transient storage. Each hint is big-endian: 7 zero bits, the entry's
+  22-bit fingerprint, then its 11-bit hint. So the caller sends no keys, and the hints can come
+  in any order, for entries of every kind. `packedHintsOf(keys)` builds the argument: expose it
+  in a view function, and one `eth_call` returns a transaction's hints. Use this style when
+  lookups are spread through the code, as in the [exchange example](../examples/exchange).
+- **Passed to each lookup.** A function that already loops over its keys calls
+  `find(keys[i], hint)`. `PagePack.hintAt(hints, i)` reads hint `i` from a `bytes` argument of
+  2-byte big-endian hints, each its key's `hintOf`, in the order of the lookups. Past the end it
+  returns 0, no hint. This style costs less, because nothing is stored and read back, but the
+  caller has to know the order of the lookups.
+
+The same batch update with each style, and with a `uint256[]` that spends a word on each hint:
+
+| Entries updated in one tx | No hint | `useHints`, 5 bytes a hint | `find(key, hint)`, a word a hint | `find(key, hint)`, 2 bytes a hint |
+| --- | ---: | ---: | ---: | ---: |
+| 1 entry | 43,046 | 35,245 (-18%) | 34,868 (-19%) | 34,751 (-19%) |
+| 10 entries | 65,886 | 51,690 (-22%) | 49,520 (-25%) | 48,188 (-27%) |
+| 30 entries | 118,576 | 88,186 (-26%) | 82,032 (-31%) | 78,128 (-34%) |
+| 64 entries, a full page | 208,822 | 150,364 (-28%) | 137,360 (-34%) | 129,122 (-38%) |
+
+A loaded hint is kept in transient storage at the directory's slot plus the fingerprint, so two
+keys with the same fingerprint share one. That is safe because a lookup checks a loaded hint
+like any other: the key it wasn't loaded for finds another entry's tag there, or its own home
+flag set, and falls back to the directory. Malformed hints are harmless too. `useHints` checks
+nothing: a hint for a fingerprint no lookup asks about is never read, one out of range is
+ignored, and bytes left after the last whole hint are dropped.
+
+**Calldata.** Hints are calldata, and calldata is part of what a hinted transaction costs: 4 gas
+for a zero byte and 16 for any other. A transaction also pays at least 21,000 gas plus 10 for
+each calldata token, where a zero byte is one token and any other byte four (EIP-7623), however
+little it executes. A batch that sends many bytes and does little with each entry sits on that
+floor, where a hint saves nothing and each of its nonzero bytes costs 40 gas. Hints are a few
+bytes and carry no key for that reason. The benchmarks measure whole transactions, so every
+figure includes its calldata and, where it applies, the floor.
+
+**Gas limits.** Monad charges a transaction for its gas limit, not for the gas it uses. A caller
+who sets the limit from an estimate made with fresh hints leaves no room for a rebalance that
+lands first and makes them stale. A stale hint still finds its entry, but through the directory:
+one page load, 8,100 gas, if nothing else in the transaction loaded it, plus a search of about
+1,000 to 1,400 gas for each lookup. Before that it reads the tag or flag it pointed at, which is
+another page load if the transaction doesn't otherwise touch that page. Leave headroom for
+stale hints in the limit, or the transaction can run out of gas.
 
 ## Rebalancing
 
@@ -292,10 +346,10 @@ data slots, after some of its entries left:
 
 | Page before the call | Operation | Gas |
 | --- | --- | ---: |
-| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,785 |
-| | Pack a 2-slot entry, moving 62 slots | 254,016 |
-| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 161,992 |
-| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 386,506 |
+| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,852 |
+| | Pack a 2-slot entry, moving 62 slots | 254,083 |
+| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 162,059 |
+| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 386,573 |
 
 ### Why entries don't pack themselves
 
@@ -414,9 +468,9 @@ key function lets its input reach the top byte. A map whose sizes are set by han
 from structs, checks each struct with `requireFits(kind, slots)` when it is created.
 
 Code that drives the layout names entries by key alone, with the module's key functions:
-`PagePack.Placement(accountKey(owner), index)` and
-`PagePack.Hint(key, ACCOUNTS.map().hintOf(key))`. The contract loads every kind's hints with one
-`useHints` call.
+`PagePack.Placement(accountKey(owner), index)` for a placement, and
+`ACCOUNTS.map().packedHintsOf(keys)` for a transaction's hints. The contract loads every kind's
+hints with one `useHints` call.
 
 A map whose kinds all have the same size, like the exchange's, can instead pin its width with
 `map(name, slots)` and check each struct against it with `requireFits` when it is created. Its
