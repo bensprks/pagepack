@@ -636,7 +636,7 @@ library PagePack {
     ///      an index held by an entry the call doesn't move, a page's entries don't fit it, two
     ///      packed entries would share a fingerprint, or the directory would overflow.
     ///
-    ///      Packing an entry from home costs about 62,000 gas, mostly MIP-8's charge for two new
+    ///      Packing an entry from home costs about 61,000 gas, mostly MIP-8's charge for two new
     ///      slots, so split large layouts across transactions. Each page that receives entries
     ///      also has its tags read once, about 200 gas per index, and a page whose entries are
     ///      moved together costs 6,000 to 7,000 more for each entry moved, however large the
@@ -666,8 +666,8 @@ library PagePack {
         view
         returns (Move[] memory moves)
     {
-        moves = new Move[](placements.length);
-        uint256 count;
+        // No moves yet, and room for one for each placement.
+        moves = _withRoom(moves, placements.length);
 
         // Bitmaps over packed indices: those holding an entry this call names, and those a
         // placement targets. Indices are below 1,024, so four words cover them.
@@ -678,22 +678,18 @@ library PagePack {
             Placement memory p = placements[i];
             (uint256 id, uint256 slots, bool inPlace) = _check(m, dir, perPage, p, named, claimed);
 
-            if (!inPlace) moves[count++] = _moveFor(dir, perPage, p, id, slots, named);
+            if (!inPlace) _addMove(moves, dir, perPage, p, id, slots, named);
         }
 
         // A target must be empty or hold an entry this call names. Since no two placements share
         // a target, a named occupant is always leaving.
-        for (uint256 i; i < count; ++i) {
+        for (uint256 i; i < moves.length; ++i) {
             uint256 index = moves[i].to;
             if (index == AT_HOME) continue;
 
             if (!_isMarked(named, index) && _load(_tagSlot(dir, perPage, index)) != 0) {
                 revert IndexTaken(index);
             }
-        }
-
-        assembly ("memory-safe") {
-            mstore(moves, count)
         }
     }
 
@@ -743,37 +739,31 @@ library PagePack {
         if (inPlace && _mark(named, p.index)) revert DuplicateKey(p.key);
     }
 
-    /// The move a checked placement makes.
-    function _moveFor(
+    /// Adds the move a checked placement makes to `moves`. Until {_allocate} picks its slots, a
+    /// move's data goes to the entry's home.
+    ///
+    /// The move is added rather than returned: a function that returns a move starts with an
+    /// empty one allocated for it, which costs about as much as the move itself.
+    function _addMove(
+        Move[] memory moves,
         uint256 dir,
         uint256 perPage,
         Placement memory p,
         uint256 id,
         uint256 slots,
         uint256[4] memory named
-    ) private view returns (Move memory move) {
-        move = _moveFrom(dir, perPage, p.key, id, slots);
-
-        if (p.index == HOME) {
-            if (move.from == AT_HOME) revert NotPacked(p.key);
-        } else {
-            move.to = p.index;
-            if (move.from == AT_HOME) return move;
-        }
-
-        if (_mark(named, move.from)) revert DuplicateKey(p.key);
-    }
-
-    /// A move of the entry with `id` from wherever it is now, to its home until the caller says
-    /// otherwise.
-    function _moveFrom(uint256 dir, uint256 perPage, bytes32 key, uint256 id, uint256 slots)
-        private
-        view
-        returns (Move memory)
-    {
+    ) private view {
         (uint256 from, uint256 position, uint256 source) = _locate(dir, perPage, id);
 
-        return Move(key, id, slots, from, AT_HOME, position, source, id & ~(PAGE_SIZE - 1));
+        if (from == AT_HOME) {
+            if (p.index == HOME) revert NotPacked(p.key);
+        } else if (_mark(named, from)) {
+            revert DuplicateKey(p.key);
+        }
+
+        uint256 to = p.index == HOME ? AT_HOME : p.index;
+
+        _append(moves, Move(p.key, id, slots, from, to, position, source, _home(id)));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -983,7 +973,7 @@ library PagePack {
                 if (mover != 0) {
                     moves[mover - 1].target = start + next;
                 } else {
-                    _append(moves, _shift(start + offset, start + next, tag, index));
+                    _addShift(moves, start + offset, start + next, tag, index);
                 }
             }
 
@@ -991,42 +981,17 @@ library PagePack {
         }
     }
 
-    /// A move of the data of an entry the request didn't name. The entry keeps its index and
-    /// gets a new tag, for which its old tag's identity bits are all it needs.
-    function _shift(uint256 source, uint256 target, uint256 tag, uint256 index)
-        private
-        pure
-        returns (Move memory)
-    {
-        return Move(bytes32(0), tag, tag & TAG_FIELD_MASK, index, index, 0, source, target);
-    }
-
-    /// A list of the same moves with room to {_append} `extra` more.
-    function _withRoom(Move[] memory moves, uint256 extra)
-        private
-        pure
-        returns (Move[] memory list)
-    {
-        // Allocated as words: a new array of moves would come with a move for every element.
-        uint256[] memory words = new uint256[](moves.length + extra);
-
-        assembly ("memory-safe") {
-            let count := mload(moves)
-
-            mcopy(add(words, 0x20), add(moves, 0x20), shl(5, count))
-            mstore(words, count)
-            list := words
-        }
-    }
-
-    /// Adds `move` to a list made {_withRoom} for it.
-    function _append(Move[] memory moves, Move memory move) private pure {
-        assembly ("memory-safe") {
-            let count := add(mload(moves), 1)
-
-            mstore(moves, count)
-            mstore(add(moves, shl(5, count)), move)
-        }
+    /// Adds a move of the data of an entry the request didn't name. The entry keeps its index and
+    /// gets a new tag, for which its old tag's identity bits are all it needs. Added rather than
+    /// returned, as in {_addMove}.
+    function _addShift(
+        Move[] memory moves,
+        uint256 source,
+        uint256 target,
+        uint256 tag,
+        uint256 index
+    ) private pure {
+        _append(moves, Move(bytes32(0), tag, tag & TAG_FIELD_MASK, index, index, 0, source, target));
     }
 
     /// The first slot of a run of `slots` free slots in a page's `used` bitmap, or NO_FIT.
@@ -1354,6 +1319,34 @@ library PagePack {
     function _isMarked(uint256[4] memory bits, uint256 index) private pure returns (bool set) {
         assembly ("memory-safe") {
             set := and(shr(and(index, 255), mload(add(bits, shl(5, shr(8, index))))), 1)
+        }
+    }
+
+    /// A list of the same moves with room to {_append} `extra` more.
+    function _withRoom(Move[] memory moves, uint256 extra)
+        private
+        pure
+        returns (Move[] memory list)
+    {
+        // Allocated as words: a new array of moves would come with a move for every element.
+        uint256[] memory words = new uint256[](moves.length + extra);
+
+        assembly ("memory-safe") {
+            let count := mload(moves)
+
+            mcopy(add(words, 0x20), add(moves, 0x20), shl(5, count))
+            mstore(words, count)
+            list := words
+        }
+    }
+
+    /// Adds `move` to a list made {_withRoom} for it.
+    function _append(Move[] memory moves, Move memory move) private pure {
+        assembly ("memory-safe") {
+            let count := add(mload(moves), 1)
+
+            mstore(moves, count)
+            mstore(add(moves, shl(5, count)), move)
         }
     }
 

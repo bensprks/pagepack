@@ -148,8 +148,8 @@ them with the transaction, and the contract loads them once with `useHints`. Map
 
 **Rebalancing** takes a list of placements, each an entry's key and its new index, or `HOME` to
 send it back. It applies them all at once, so two entries can swap indices, and picks where on
-the page each entry's data goes. Packing a one-slot entry costs about 62,000 gas. Swapping two
-packed entries costs about 61,000. pagepack has no access control: your contract decides who
+the page each entry's data goes. Packing a one-slot entry costs about 61,000 gas. Swapping two
+packed entries costs about 60,000. pagepack has no access control: your contract decides who
 rebalances. New entries always start on their home pages. Only `rebalance` packs them.
 
 The [reference](docs/reference.md) covers the storage layout, each step's cost, and planning

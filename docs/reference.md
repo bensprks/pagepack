@@ -256,22 +256,22 @@ after it. If the page doesn't have enough free slots, `rebalance` reverts with `
 Because every old slot is cleared before any new one is written, moves within a page also avoid
 MIP-8's state-growth charge.
 
-Packing an entry from home costs about 42,000 gas plus 18,000 to 20,000 for each nonzero slot it
+Packing an entry from home costs about 41,000 gas plus 18,000 to 20,000 for each nonzero slot it
 holds, mostly MIP-8's charge for new storage slots. Slots that are still zero cost nothing:
 
 | Packing from home, 16 entries per call | Gas per entry |
 | --- | ---: |
-| 1-slot entries | 61,934 |
-| 3-slot entries | 97,736 |
-| 8-slot entries | 188,755 |
-| 8-slot entries, 1 slot set | 65,905 |
-| 1-slot entries, never written | 41,584 |
-| 1-slot entries, never written, home-hint map | 61,955 |
+| 1-slot entries | 61,425 |
+| 3-slot entries | 97,227 |
+| 8-slot entries | 188,246 |
+| 8-slot entries, 1 slot set | 65,396 |
+| 1-slot entries, never written | 41,075 |
+| 1-slot entries, never written, home-hint map | 61,446 |
 
-Filling a map of 1,016 one-slot entries takes about 58M gas, so split large migrations into
+Filling a map of 1,016 one-slot entries takes about 57M gas, so split large migrations into
 transactions sized from the table above. Listing new entries in fingerprint order also skips a
 sort. After that, a rebalance costs what it changes. Swapping two entries on a page costs about
-61,000 gas at any size, since only their tags move. Moving an entry to another page also reads
+60,000 gas at any size, since only their tags move. Moving an entry to another page also reads
 that page's tags, about 200 gas each: 13,000 for a page of 64. Packing or evicting rebuilds the
 directory once per call, which grows with the number of packed entries. Evicting also pays
 17,000 gas for the entry's home slot in a default map:
@@ -279,11 +279,11 @@ directory once per call, which grows with the number of packed entries. Evicting
 | Operation (one-slot entries, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
 | --- | ---: | ---: | ---: |
 | Empty rebalance | 22,006 | 22,006 | 22,006 |
-| Swap two entries | 60,846 | 61,981 | 62,029 |
-| Move one entry | 112,010 | 112,575 | 120,693 |
-| Evict one entry | 95,576 | 157,511 | 228,279 |
-| Replace one entry with another | 139,719 | 200,826 | 270,650 |
-| Resubmit the whole layout | 173,811 | 1,227,099 | 2,415,835 |
+| Swap two entries | 59,751 | 60,886 | 60,934 |
+| Move one entry | 111,560 | 112,125 | 120,243 |
+| Evict one entry | 95,123 | 157,058 | 227,826 |
+| Replace one entry with another | 138,745 | 199,852 | 269,676 |
+| Resubmit the whole layout | 160,950 | 1,122,846 | 2,208,766 |
 
 Sliding entries together costs 6,000 to 7,000 gas for each entry moved, plus about 2,000 for each
 of its slots after the first, and only the call that needs it pays. So a page of many small
@@ -292,10 +292,10 @@ data slots, after some of its entries left:
 
 | Page before the call | Operation | Gas |
 | --- | --- | ---: |
-| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,827 |
-| | Pack a 2-slot entry, moving 62 slots | 242,852 |
-| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 162,034 |
-| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 353,322 |
+| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,501 |
+| | Pack a 2-slot entry, moving 62 slots | 242,188 |
+| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 161,708 |
+| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 347,588 |
 
 One call can make room on many pages, and a page costs the same to compact whatever else the
 call does. Take full pages of 64 one-slot entries, and a call that on each page evicts 32 of them
@@ -304,8 +304,8 @@ one, they leave none, so every page compacts:
 
 | Pages in one call | Gaps fit | Pages compact | Compacting, per page |
 | --- | ---: | ---: | ---: |
-| 1 page | 1,582,526 | 1,811,792 | 229,266 |
-| 8 pages | 12,556,828 | 14,374,276 | 227,181 |
+| 1 page | 1,553,649 | 1,777,507 | 223,858 |
+| 8 pages | 12,324,447 | 14,098,631 | 221,773 |
 
 ### Why entries don't pack themselves
 
@@ -357,7 +357,7 @@ pagepack applies layouts. Choosing them happens offchain. What a planner needs t
   keep a particular entry from being packed or to make an unchecked layout revert. A clash never
   makes one entry read as another, since lookups check the tag. On a clash, pack whichever entry
   saves more; one already packed has no claim to its fingerprint.
-- **Cost.** Packing costs about 42,000 gas per entry plus 18,000 to 20,000 per nonzero slot, so
+- **Cost.** Packing costs about 41,000 gas per entry plus 18,000 to 20,000 per nonzero slot, so
   large migrations take several transactions. Packing or evicting rebuilds the directory once per
   call, which costs more as it fills. See [Rebalancing](#rebalancing) for the tables.
 - **Payback.** A rebalance pays off when the page loads it saves before the next one exceed its
