@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {PagePack} from "pagepack/PagePack.sol";
 import {Exchange} from "../../../examples/exchange/Exchange.sol";
 import {
     Account,
@@ -27,7 +26,7 @@ contract MappingExchange is Exchange {
     {}
 
     /// Mappings have nothing to hint.
-    function _useHints(PagePack.Hint[] calldata) internal pure override {}
+    function _useHints(bytes calldata) internal pure override {}
 
     function _account(address trader) internal view override returns (Account storage) {
         return _accounts[trader];

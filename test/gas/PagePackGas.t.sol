@@ -12,6 +12,10 @@ import {MappingBalances, PackedBalances} from "../utils/Balances.sol";
 /// Layout: bench keys 0-63 fill one packed page, keys 64-93 are spread over three pages, keys 94+
 /// are never packed, and 400 filler entries give the directory a realistic depth.
 /// A second copy in a home-hint map measures HOME hints for the entries that aren't packed.
+///
+/// "Hinted" means 5-byte hints loaded once with useHints, the style the README shows. The hint
+/// styles section measures the two ways of passing each lookup its hint instead. Every number is
+/// a whole transaction's gas, so it includes the calldata that carries the keys and the hints.
 contract PagePackGasTest is Test {
     uint256 internal constant FILLER = 400;
     uint256 internal constant ENTRIES_PER_PAGE = 64;
@@ -171,6 +175,42 @@ contract PagePackGasTest is Test {
     }
 
     // ------------------------------------------------------------------------------------------
+    // Hint styles: a hint passed to each lookup, as a word or as 2 bytes
+    // ------------------------------------------------------------------------------------------
+
+    function test_gas_hintWords_1() public {
+        _bumpWithWords("1 entry", 1);
+    }
+
+    function test_gas_hintWords_10() public {
+        _bumpWithWords("10 entries", 10);
+    }
+
+    function test_gas_hintWords_30() public {
+        _bumpWithWords("30 entries", 30);
+    }
+
+    function test_gas_hintWords_64() public {
+        _bumpWithWords("64 entries, a full page", 64);
+    }
+
+    function test_gas_hintBytes_1() public {
+        _bumpPositional("1 entry", 1);
+    }
+
+    function test_gas_hintBytes_10() public {
+        _bumpPositional("10 entries", 10);
+    }
+
+    function test_gas_hintBytes_30() public {
+        _bumpPositional("30 entries", 30);
+    }
+
+    function test_gas_hintBytes_64() public {
+        _bumpPositional("64 entries, a full page", 64);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
@@ -214,20 +254,56 @@ contract PagePackGasTest is Test {
         uint256 count
     ) internal {
         bytes32[] memory keys = _keys(first, count);
-        uint256[] memory hints = new uint256[](count);
 
-        for (uint256 i; i < count; ++i) {
-            hints[i] = target.hintOf(keys[i]);
-            assertTrue(hints[i] != 0);
-        }
+        // One call builds the hints, as an offchain caller would. Every key has one.
+        bytes memory hints = target.hintsFor(keys);
+        assertEq(hints.length, 5 * count);
 
         // Reading hints above warmed the pages. Measure in a fresh transaction.
         vm.cool(address(target));
 
-        target.bump(keys, hints);
+        target.bumpLoaded(keys, hints);
         vm.snapshotGasLastCall("pagepack-hinted", scenario);
 
         _assertBumped(target, keys);
+    }
+
+    /// The first `count` bench keys, each lookup passed its hint from a uint256[].
+    function _bumpWithWords(string memory scenario, uint256 count) internal {
+        bytes32[] memory keys = _keys(0, count);
+        uint256[] memory hints = new uint256[](count);
+
+        for (uint256 i; i < count; ++i) {
+            hints[i] = packedBalances.hintOf(keys[i]);
+            assertTrue(hints[i] != 0);
+        }
+
+        vm.cool(address(packedBalances));
+
+        packedBalances.bump(keys, hints);
+        vm.snapshotGasLastCall("pagepack-hinted-words", scenario);
+
+        _assertBumped(packedBalances, keys);
+    }
+
+    /// The same, each hint read from 2 bytes at the key's position.
+    function _bumpPositional(string memory scenario, uint256 count) internal {
+        bytes32[] memory keys = _keys(0, count);
+        bytes memory hints;
+
+        for (uint256 i; i < count; ++i) {
+            uint256 hint = packedBalances.hintOf(keys[i]);
+            assertTrue(hint != 0);
+
+            hints = bytes.concat(hints, bytes2(uint16(hint)));
+        }
+
+        vm.cool(address(packedBalances));
+
+        packedBalances.bumpPositional(keys, hints);
+        vm.snapshotGasLastCall("pagepack-hinted-positional", scenario);
+
+        _assertBumped(packedBalances, keys);
     }
 
     function _assertBumped(PackedBalances target, bytes32[] memory keys) internal view {

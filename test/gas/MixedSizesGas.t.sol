@@ -11,11 +11,11 @@ abstract contract AccountsAndApprovals {
 
     function approval(bytes32 key) internal view virtual returns (Entry);
 
-    function accountHint(bytes32 key) external view virtual returns (uint256);
+    /// The hints a spend from `keys` takes, as an offchain caller would fetch them: 5 bytes for
+    /// each account, then 5 for each approval.
+    function hintsFor(bytes32[] calldata keys) external view virtual returns (bytes memory);
 
-    function approvalHint(bytes32 key) external view virtual returns (uint256);
-
-    /// The keys an account and its approval are stored under, for building hints.
+    /// The keys an account and its approval are stored under.
     function accountKeyOf(bytes32 key) public pure virtual returns (bytes32) {
         return key;
     }
@@ -31,7 +31,17 @@ abstract contract AccountsAndApprovals {
         uint256[] calldata approvalAt
     ) external virtual;
 
-    function _useHints(PagePack.Hint[] calldata hints) internal virtual;
+    function _useHints(bytes calldata hints) internal virtual;
+
+    /// Every account's key, then every approval's.
+    function _entryKeys(bytes32[] calldata keys) internal pure returns (bytes32[] memory both) {
+        both = new bytes32[](2 * keys.length);
+
+        for (uint256 i; i < keys.length; ++i) {
+            both[i] = accountKeyOf(keys[i]);
+            both[keys.length + i] = approvalKeyOf(keys[i]);
+        }
+    }
 
     function seed(bytes32[] calldata keys) external {
         for (uint256 i; i < keys.length; ++i) {
@@ -42,7 +52,7 @@ abstract contract AccountsAndApprovals {
         }
     }
 
-    function spend(bytes32[] calldata keys, PagePack.Hint[] calldata hints) external {
+    function spend(bytes32[] calldata keys, bytes calldata hints) external {
         _useHints(hints);
 
         for (uint256 i; i < keys.length; ++i) {
@@ -96,17 +106,12 @@ contract Mappings is AccountsAndApprovals {
         }
     }
 
-    function accountHint(bytes32) external pure override returns (uint256) {
-        return 0;
-    }
-
-    function approvalHint(bytes32) external pure override returns (uint256) {
-        return 0;
-    }
+    /// Mappings take no hints.
+    function hintsFor(bytes32[] calldata) external pure override returns (bytes memory) {}
 
     function pack(bytes32[] calldata, uint256[] calldata, uint256[] calldata) external override {}
 
-    function _useHints(PagePack.Hint[] calldata) internal override {}
+    function _useHints(bytes calldata) internal override {}
 }
 
 /// A map per size: accounts and approvals never share a page.
@@ -122,12 +127,14 @@ contract TwoMaps is AccountsAndApprovals {
         return APPROVALS.find(approvalKey(key));
     }
 
-    function accountHint(bytes32 key) external view override returns (uint256) {
-        return ACCOUNTS.hintOf(key);
-    }
+    function hintsFor(bytes32[] calldata keys) external view override returns (bytes memory) {
+        bytes32[] memory approvals = new bytes32[](keys.length);
 
-    function approvalHint(bytes32 key) external view override returns (uint256) {
-        return APPROVALS.hintOf(approvalKey(key));
+        for (uint256 i; i < keys.length; ++i) {
+            approvals[i] = approvalKey(keys[i]);
+        }
+
+        return bytes.concat(ACCOUNTS.packedHintsOf(keys), APPROVALS.packedHintsOf(approvals));
     }
 
     function pack(
@@ -147,8 +154,8 @@ contract TwoMaps is AccountsAndApprovals {
         APPROVALS.rebalance(approvals);
     }
 
-    /// Account hints first, then approval hints.
-    function _useHints(PagePack.Hint[] calldata hints) internal override {
+    /// A map loads only its own hints: the accounts' half, then the approvals'.
+    function _useHints(bytes calldata hints) internal override {
         ACCOUNTS.useHints(hints[:hints.length / 2]);
         APPROVALS.useHints(hints[hints.length / 2:]);
     }
@@ -166,12 +173,8 @@ contract PinnedMap is AccountsAndApprovals {
         return MAP.find(approvalKey(key));
     }
 
-    function accountHint(bytes32 key) external view override returns (uint256) {
-        return MAP.hintOf(key);
-    }
-
-    function approvalHint(bytes32 key) external view override returns (uint256) {
-        return MAP.hintOf(approvalKey(key));
+    function hintsFor(bytes32[] calldata keys) external view override returns (bytes memory) {
+        return MAP.packedHintsOf(_entryKeys(keys));
     }
 
     function pack(
@@ -189,7 +192,7 @@ contract PinnedMap is AccountsAndApprovals {
         MAP.rebalance(placements);
     }
 
-    function _useHints(PagePack.Hint[] calldata hints) internal override {
+    function _useHints(bytes calldata hints) internal override {
         MAP.useHints(hints);
     }
 }
@@ -219,12 +222,8 @@ contract KindedMap is AccountsAndApprovals {
         return MAP.find(approvalKeyOf(key));
     }
 
-    function accountHint(bytes32 key) external view override returns (uint256) {
-        return MAP.hintOf(accountKeyOf(key));
-    }
-
-    function approvalHint(bytes32 key) external view override returns (uint256) {
-        return MAP.hintOf(approvalKeyOf(key));
+    function hintsFor(bytes32[] calldata keys) external view override returns (bytes memory) {
+        return MAP.packedHintsOf(_entryKeys(keys));
     }
 
     function pack(
@@ -242,7 +241,7 @@ contract KindedMap is AccountsAndApprovals {
         MAP.rebalance(placements);
     }
 
-    function _useHints(PagePack.Hint[] calldata hints) internal override {
+    function _useHints(bytes calldata hints) internal override {
         MAP.useHints(hints);
     }
 }
@@ -305,14 +304,9 @@ contract MixedSizesGasTest is Test {
     function _spend(AccountsAndApprovals target, string memory group, uint256 count) internal {
         bytes32[] memory keys = _keys(count);
 
-        // Mappings take no hints.
-        PagePack.Hint[] memory hints = new PagePack.Hint[](target == mappings ? 0 : 2 * count);
-
-        for (uint256 i; i < hints.length / 2; ++i) {
-            hints[i] = PagePack.Hint(target.accountKeyOf(keys[i]), target.accountHint(keys[i]));
-            hints[count + i] =
-                PagePack.Hint(target.approvalKeyOf(keys[i]), target.approvalHint(keys[i]));
-        }
+        // A hint for every account and approval. Mappings take none.
+        bytes memory hints = target.hintsFor(keys);
+        assertEq(hints.length, target == mappings ? 0 : 10 * count);
 
         // Reading hints above warmed the pages. Measure in a fresh transaction.
         vm.cool(address(target));

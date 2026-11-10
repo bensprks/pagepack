@@ -31,16 +31,13 @@ abstract contract EntryStoreBase {
         return MAP.find(key, hint).slot();
     }
 
-    /// Loads hints for the rest of the transaction.
-    function useHints(PagePack.Hint[] calldata hints) external {
+    /// Loads packed hints for the rest of the transaction.
+    function useHints(bytes calldata hints) external {
         MAP.useHints(hints);
     }
 
-    /// Loads hints, then looks `key` up without one, all in one call.
-    function slotOfWithHints(PagePack.Hint[] calldata hints, bytes32 key)
-        external
-        returns (uint256)
-    {
+    /// Loads packed hints, then looks `key` up without one, all in one call.
+    function slotOfWithHints(bytes calldata hints, bytes32 key) external returns (uint256) {
         MAP.useHints(hints);
         return MAP.find(key).slot();
     }
@@ -92,8 +89,8 @@ abstract contract EntryReader is EntryStoreBase {
         return _readAll(MAP.find(key, hint), MAP.sizeOf(key));
     }
 
-    /// Every data slot of the entry, found after loading `hints`, all in one call.
-    function readAllWithHints(PagePack.Hint[] calldata hints, bytes32 key)
+    /// Every data slot of the entry, found after loading packed `hints`, all in one call.
+    function readAllWithHints(bytes calldata hints, bytes32 key)
         external
         returns (uint256[] memory data)
     {
@@ -107,6 +104,52 @@ abstract contract EntryReader is EntryStoreBase {
         for (uint256 w; w < slots; ++w) {
             data[w] = e.read(w);
         }
+    }
+}
+
+/// A map of one kind, `slots` wide, that also builds the hints a transaction carries and reads
+/// them back. Kept apart for the same reason as EntryReader.
+contract HintStore is EntryStoreBase {
+    constructor(uint256 slots, bool homeHints) EntryStoreBase(_mapOfOneKind(slots, 0, homeHints)) {}
+
+    function packedHintOf(bytes32 key) external view returns (bytes5) {
+        return MAP.packedHintOf(key);
+    }
+
+    function packedHintsOf(bytes32[] calldata keys) external view returns (bytes memory) {
+        return MAP.packedHintsOf(keys);
+    }
+
+    /// Loads the first `length` bytes of `hints`, then looks `key` up, all in one call.
+    function slotOfWithHints(bytes calldata hints, uint256 length, bytes32 key)
+        external
+        returns (uint256)
+    {
+        MAP.useHints(hints[:length]);
+        return MAP.find(key).slot();
+    }
+
+    /// Hint `i` of a run of 2-byte hints.
+    function hintAt(bytes calldata hints, uint256 i) external pure returns (uint256) {
+        return PagePack.hintAt(hints, i);
+    }
+
+    /// Hint `i` of the first `length` bytes of `hints`.
+    function hintAt(bytes calldata hints, uint256 length, uint256 i)
+        external
+        pure
+        returns (uint256)
+    {
+        return PagePack.hintAt(hints[:length], i);
+    }
+
+    /// Looks `key` up with hint `i` of a run of 2-byte hints.
+    function slotOfAt(bytes32 key, bytes calldata hints, uint256 i)
+        external
+        view
+        returns (uint256)
+    {
+        return MAP.find(key, PagePack.hintAt(hints, i)).slot();
     }
 }
 
