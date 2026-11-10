@@ -171,6 +171,9 @@ library PagePack {
     uint256 private constant SIZES_SHIFT = 16;
     uint256 private constant HANDLE_FIELDS = (1 << 80) - 1;
 
+    // Tables of numbers below 2^16 hold 16 to a word. See {_setNumber}.
+    uint256 private constant NUMBERS_PER_WORD = 16;
+
     // Every entry on a page needs a data slot as well as a tag.
     uint256 private constant MAX_PER_PAGE = PAGE_SIZE / 2;
 
@@ -197,6 +200,10 @@ library PagePack {
 
     // What a page search returns when no run of free slots is long enough.
     uint256 private constant NO_FIT = 0xffff;
+
+    // Set above the 128 slot bits of a page's bitmap of slots in use, once the page has to
+    // compact.
+    uint256 private constant COMPACTS = 1 << PAGE_SIZE;
 
     // ------------------------------------------------------------------------------------------
     // Maps
@@ -761,11 +768,12 @@ library PagePack {
     ///      an index held by an entry the call doesn't move, a page's entries don't fit it, two
     ///      packed entries would share a fingerprint, or the directory would overflow.
     ///
-    ///      Packing an entry from home costs about 62,000 gas, mostly MIP-8's charge for two new
+    ///      Packing an entry from home costs about 61,000 gas, mostly MIP-8's charge for two new
     ///      slots, so split large layouts across transactions. Each page that receives entries
-    ///      also has its tags read once, about 200 gas per index. The sort of newly packed
-    ///      entries returns early if the caller lists them in fingerprint order
-    ///      ({fingerprintOf}).
+    ///      also has its tags read once, about 200 gas per index, and a page whose entries are
+    ///      moved together costs 6,000 to 7,000 more for each entry moved, however large the
+    ///      request. The sort of newly packed entries returns early if the caller lists them in
+    ///      fingerprint order ({fingerprintOf}).
     ///
     ///      There is no access control here: the calling contract decides who may rebalance.
     function rebalance(PagedMap m, Placement[] memory placements) internal {
@@ -790,8 +798,8 @@ library PagePack {
         view
         returns (Move[] memory moves)
     {
-        moves = new Move[](placements.length);
-        uint256 count;
+        // No moves yet, and room for one for each placement.
+        moves = _withRoom(moves, placements.length);
 
         // Bitmaps over packed indices: those holding an entry this call names, and those a
         // placement targets. Indices are below 1,024, so four words cover them.
@@ -802,22 +810,18 @@ library PagePack {
             Placement memory p = placements[i];
             (uint256 id, uint256 slots, bool inPlace) = _check(m, dir, perPage, p, named, claimed);
 
-            if (!inPlace) moves[count++] = _moveFor(dir, perPage, p, id, slots, named);
+            if (!inPlace) _addMove(moves, dir, perPage, p, id, slots, named);
         }
 
         // A target must be empty or hold an entry this call names. Since no two placements share
         // a target, a named occupant is always leaving.
-        for (uint256 i; i < count; ++i) {
+        for (uint256 i; i < moves.length; ++i) {
             uint256 index = moves[i].to;
             if (index == AT_HOME) continue;
 
             if (!_isMarked(named, index) && _load(_tagSlot(dir, perPage, index)) != 0) {
                 revert IndexTaken(index);
             }
-        }
-
-        assembly ("memory-safe") {
-            mstore(moves, count)
         }
     }
 
@@ -867,37 +871,31 @@ library PagePack {
         if (inPlace && _mark(named, p.index)) revert DuplicateKey(p.key);
     }
 
-    /// The move a checked placement makes.
-    function _moveFor(
+    /// Adds the move a checked placement makes to `moves`. Until {_allocate} picks its slots, a
+    /// move's data goes to the entry's home.
+    ///
+    /// The move is added rather than returned: a function that returns a move starts with an
+    /// empty one allocated for it, which costs about as much as the move itself.
+    function _addMove(
+        Move[] memory moves,
         uint256 dir,
         uint256 perPage,
         Placement memory p,
         uint256 id,
         uint256 slots,
         uint256[4] memory named
-    ) private view returns (Move memory move) {
-        move = _moveFrom(dir, perPage, p.key, id, slots);
-
-        if (p.index == HOME) {
-            if (move.from == AT_HOME) revert NotPacked(p.key);
-        } else {
-            move.to = p.index;
-            if (move.from == AT_HOME) return move;
-        }
-
-        if (_mark(named, move.from)) revert DuplicateKey(p.key);
-    }
-
-    /// A move of the entry with `id` from wherever it is now, to its home until the caller says
-    /// otherwise.
-    function _moveFrom(uint256 dir, uint256 perPage, bytes32 key, uint256 id, uint256 slots)
-        private
-        view
-        returns (Move memory)
-    {
+    ) private view {
         (uint256 from, uint256 position, uint256 source) = _locate(dir, perPage, id);
 
-        return Move(key, id, slots, from, AT_HOME, position, source, id & ~(PAGE_SIZE - 1));
+        if (from == AT_HOME) {
+            if (p.index == HOME) revert NotPacked(p.key);
+        } else if (_mark(named, from)) {
+            revert DuplicateKey(p.key);
+        }
+
+        uint256 to = p.index == HOME ? AT_HOME : p.index;
+
+        _append(moves, Move(p.key, id, slots, from, to, position, source, _home(id)));
     }
 
     // ------------------------------------------------------------------------------------------
@@ -906,7 +904,8 @@ library PagePack {
 
     /// Picks the data slots of every move to a packed index. An entry moving within its page
     /// keeps its data; entries arriving on a page take its gaps, first fit in placement order.
-    /// Returns the moves, plus a move for each staying entry that a full page had to shift.
+    /// A page with room for an arriving entry but no gap that fits it compacts: see {_compact}.
+    /// Returns the moves, plus a move for each staying entry that a compacting page shifts.
     function _allocate(uint256 dir, uint256 perPage, Move[] memory moves)
         private
         view
@@ -929,6 +928,7 @@ library PagePack {
         // Each page's slots in use, read from its tags when an entry first arrives on it. The
         // tag region is always in use, so a loaded page is never 0.
         uint256[] memory used = new uint256[]((MAX_INDEX + perPage - 1) / perPage);
+        uint256 compacting;
 
         for (uint256 i; i < moves.length; ++i) {
             Move memory move = moves[i];
@@ -946,17 +946,26 @@ library PagePack {
             uint256 offset = _firstFit(pageUsed, move.slots);
 
             if (offset == NO_FIT) {
-                if (_countFree(pageUsed) < move.slots) revert PageFull(page);
+                uint256 free = _countFree(pageUsed);
+                if (free < move.slots) revert PageFull(page);
 
-                (moves, offset) = _compact(start, perPage, moves, i, page, leaving);
-                pageUsed = _range(0, offset);
+                // The page compacts. {_compact} lays it out once every entry has its slots:
+                // all that is on the page so far will sit together from its first slot, so this
+                // entry goes straight after. That leaves the page's free slots in one run at its
+                // end, where a later entry either fits or finds the page full, so no page
+                // compacts twice.
+                offset = PAGE_SIZE - free;
+                pageUsed = COMPACTS | _range(0, offset);
+                ++compacting;
             }
 
             move.target = start + offset;
             used[page] = pageUsed | _range(offset, move.slots);
         }
 
-        return moves;
+        if (compacting == 0) return moves;
+
+        return _compact(dir, perPage, moves, used, leaving, compacting);
     }
 
     /// Whether a move brings an entry onto its target page from home or another page.
@@ -999,100 +1008,122 @@ library PagePack {
         }
     }
 
-    /// Slides the data of every entry staying on `page` down against the tag region, in the
-    /// order it sits, then lines up the entries that arrived before move `upTo`. Entries that
-    /// already sit where they belong don't move. Returns the moves, with a move added for each
-    /// unmoved entry that shifts, and the first free slot after them all.
+    /// Lays out the `pages` pages that {_allocate} marked COMPACTS in `used`: each had room for
+    /// an arriving entry but no gap that fit it. The data of the entries staying on such a page
+    /// slides down against the tag region, in the order it sits, and the entries arriving on the
+    /// page follow in placement order. Returns the moves, with a move added for each staying
+    /// entry that slides and that the request didn't name.
     ///
-    /// Only runs when a page has room for an arriving entry but no gap that fits it.
+    /// Goes through the moves twice, however many pages compact. Beyond that each page costs
+    /// what the page holds, whatever else the request does.
     function _compact(
-        uint256 start,
+        uint256 dir,
         uint256 perPage,
         Move[] memory moves,
-        uint256 upTo,
-        uint256 page,
-        uint256[4] memory leaving
-    ) private view returns (Move[] memory grown, uint256 next) {
-        // Each staying entry's index plus one, by where its data starts.
-        uint256[] memory byOffset = new uint256[](PAGE_SIZE);
+        uint256[] memory used,
+        uint256[4] memory leaving,
+        uint256 pages
+    ) private view returns (Move[] memory grown) {
+        // Room for a move for every index on those pages.
+        grown = _withRoom(moves, pages * perPage);
+
+        // The number, plus one, of the move leaving each packed index. A request makes fewer
+        // than 2^16 moves: at most one to each index, and one home from each.
+        uint256[] memory byFrom = new uint256[](MAX_INDEX / NUMBERS_PER_WORD);
+
+        for (uint256 i; i < moves.length; ++i) {
+            uint256 from = moves[i].from;
+            if (from != AT_HOME) _setNumber(byFrom, from, i + 1);
+        }
+
+        // The first free slot of each page laid out so far.
+        uint256[] memory next = new uint256[](used.length);
+
+        for (uint256 i; i < moves.length; ++i) {
+            Move memory move = moves[i];
+            if (!_arrives(move, perPage)) continue;
+
+            uint256 page = move.to / perPage;
+            if (used[page] & COMPACTS == 0) continue;
+
+            uint256 start = dir + ((page + 1) << 7);
+
+            if (next[page] == 0) {
+                uint256[] memory byOffset = _staying(start, perPage, page, leaving);
+                next[page] = _slide(start, perPage, byOffset, grown, byFrom);
+            }
+
+            move.target = start + next[page];
+            next[page] += move.slots;
+        }
+    }
+
+    /// The index, plus one, of each entry staying on a page, by where on the page its data
+    /// starts: a table of numbers, as {_setNumber} keeps them.
+    function _staying(uint256 start, uint256 perPage, uint256 page, uint256[4] memory leaving)
+        private
+        view
+        returns (uint256[] memory byOffset)
+    {
+        byOffset = new uint256[](PAGE_SIZE / NUMBERS_PER_WORD);
+
         uint256 first = page * perPage;
         uint256 end = _min(first + perPage, MAX_INDEX);
 
         for (uint256 index = first; index < end; ++index) {
             uint256 tag = _load(start + index - first);
-            if (tag != 0 && !_isMarked(leaving, index)) byOffset[_offsetOf(tag)] = index + 1;
-        }
 
-        (grown, next) = _slide(start, perPage, moves, byOffset);
-
-        // Entries that already arrived on this page follow, in placement order.
-        for (uint256 i; i < upTo; ++i) {
-            Move memory move = moves[i];
-            if (!_arrives(move, perPage) || move.to / perPage != page) continue;
-
-            move.target = start + next;
-            next += move.slots;
+            if (tag != 0 && !_isMarked(leaving, index)) {
+                _setNumber(byOffset, _offsetOf(tag), index + 1);
+            }
         }
     }
 
-    /// Lays the staying entries listed in `byOffset` out one after another from the end of the
-    /// tag region. See {_compact}.
-    function _slide(uint256 start, uint256 perPage, Move[] memory moves, uint256[] memory byOffset)
-        private
-        view
-        returns (Move[] memory grown, uint256 next)
-    {
-        grown = new Move[](moves.length + perPage);
-        uint256 count = moves.length;
-
-        for (uint256 i; i < count; ++i) {
-            grown[i] = moves[i];
-        }
-
+    /// Lays the entries staying on the page at `start` out one after another from the end of its
+    /// tag region, in the order their data sits, and returns the first slot after them. An entry
+    /// already in place needs nothing. One that slides has its move retargeted if the request
+    /// moves it within the page, and otherwise gets a move of its own, added to `moves`.
+    function _slide(
+        uint256 start,
+        uint256 perPage,
+        uint256[] memory byOffset,
+        Move[] memory moves,
+        uint256[] memory byFrom
+    ) private view returns (uint256 next) {
         next = perPage;
 
         for (uint256 offset = perPage; offset < PAGE_SIZE; ++offset) {
-            if (byOffset[offset] == 0) continue;
+            uint256 index = _number(byOffset, offset);
+            if (index == 0) continue;
 
-            uint256 index = byOffset[offset] - 1;
+            --index;
             uint256 tag = _load(start + index % perPage);
 
             if (offset != next) {
-                Move memory mover = _leaving(moves, index);
+                uint256 mover = _number(byFrom, index);
 
-                if (mover.slots != 0) {
-                    mover.target = start + next;
+                if (mover != 0) {
+                    moves[mover - 1].target = start + next;
                 } else {
-                    // An unmoved entry keeps its index and gets a new tag, for which its old
-                    // tag's identity bits are all it needs.
-                    grown[count++] = Move(
-                        bytes32(0),
-                        tag,
-                        tag & TAG_FIELD_MASK,
-                        index,
-                        index,
-                        0,
-                        start + offset,
-                        start + next
-                    );
+                    _addShift(moves, start + offset, start + next, tag, index);
                 }
             }
 
             next += tag & TAG_FIELD_MASK;
         }
-
-        assembly ("memory-safe") {
-            mstore(grown, count)
-        }
     }
 
-    /// The move leaving packed `index`, or an empty move if none does.
-    function _leaving(Move[] memory moves, uint256 index) private pure returns (Move memory) {
-        for (uint256 i; i < moves.length; ++i) {
-            if (moves[i].from == index) return moves[i];
-        }
-
-        return Move(bytes32(0), 0, 0, 0, 0, 0, 0, 0);
+    /// Adds a move of the data of an entry the request didn't name. The entry keeps its index and
+    /// gets a new tag, for which its old tag's identity bits are all it needs. Added rather than
+    /// returned, as in {_addMove}.
+    function _addShift(
+        Move[] memory moves,
+        uint256 source,
+        uint256 target,
+        uint256 tag,
+        uint256 index
+    ) private pure {
+        _append(moves, Move(bytes32(0), tag, tag & TAG_FIELD_MASK, index, index, 0, source, target));
     }
 
     /// The first slot of a run of `slots` free slots in a page's `used` bitmap, or NO_FIT.
@@ -1420,6 +1451,56 @@ library PagePack {
     function _isMarked(uint256[4] memory bits, uint256 index) private pure returns (bool set) {
         assembly ("memory-safe") {
             set := and(shr(and(index, 255), mload(add(bits, shl(5, shr(8, index))))), 1)
+        }
+    }
+
+    /// A list of the same moves with room to {_append} `extra` more.
+    function _withRoom(Move[] memory moves, uint256 extra)
+        private
+        pure
+        returns (Move[] memory list)
+    {
+        // Allocated as words: a new array of moves would come with a move for every element.
+        uint256[] memory words = new uint256[](moves.length + extra);
+
+        assembly ("memory-safe") {
+            let count := mload(moves)
+
+            mcopy(add(words, 0x20), add(moves, 0x20), shl(5, count))
+            mstore(words, count)
+            list := words
+        }
+    }
+
+    /// Adds `move` to a list made {_withRoom} for it.
+    function _append(Move[] memory moves, Move memory move) private pure {
+        assembly ("memory-safe") {
+            let count := add(mload(moves), 1)
+
+            mstore(moves, count)
+            mstore(add(moves, shl(5, count)), move)
+        }
+    }
+
+    /// Sets number `at` in a table of 16-bit numbers, kept 16 to a word. Callers keep `at`
+    /// inside the table and `value` below 2^16.
+    function _setNumber(uint256[] memory table, uint256 at, uint256 value) private pure {
+        assembly ("memory-safe") {
+            let location := add(add(table, 0x20), shl(5, shr(4, at)))
+            let shift := shl(4, and(at, 15))
+            let word := mload(location)
+
+            // Flips the bits in which the number held differs from `value`.
+            mstore(location, xor(word, shl(shift, xor(and(shr(shift, word), 0xffff), value))))
+        }
+    }
+
+    /// Number `at` in a table of 16-bit numbers. See {_setNumber}.
+    function _number(uint256[] memory table, uint256 at) private pure returns (uint256 value) {
+        assembly ("memory-safe") {
+            let word := mload(add(add(table, 0x20), shl(5, shr(4, at))))
+
+            value := and(shr(shl(4, and(at, 15)), word), 0xffff)
         }
     }
 
