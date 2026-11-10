@@ -4,7 +4,9 @@ Each row's percentages are relative to the first column that has a value for tha
 the first row when a table sets compare_to_first_row. Tables whose columns aren't alternatives,
 such as directory sizes, set percentages to False. A table can set divide_by to show each value
 per item, e.g. per entry when a benchmark packs several at once. A column can name a third
-value, a scale for snapshots kept in hundredths, which it shows with two decimals.
+value, a scale for snapshots kept in hundredths, which it shows with two decimals. A table can
+set difference_per to add a column: the last column less the first, divided by a number for each
+row, e.g. the pages a benchmark compacts.
 
 Usage: python3 test/gas/report.py [snapshots-dir]
 """
@@ -76,6 +78,17 @@ TABLES = [
             "Pack a 2-slot entry into a gap",
             "Pack a 2-slot entry, moving 32 entries",
         ],
+    },
+    {
+        "title": "Library: packing 16 two-slot entries a page as 32 one-slot entries leave it",
+        "label": "Pages in one call",
+        "columns": [
+            ("Gaps fit", "pagepack-rebalance-gaps"),
+            ("Pages compact", "pagepack-rebalance-compacting"),
+        ],
+        "percentages": False,
+        "difference_per": ("Compacting, per page", [1, 8]),
+        "rows": ["1 page", "8 pages"],
     },
     {
         "title": "Library: spending from two-slot accounts under one-slot approvals, hinted",
@@ -192,14 +205,18 @@ def render(table: dict, directory: Path) -> None:
     groups = [load(directory, column[1]) for column in table["columns"]]
     scales = [column[2] if len(column) > 2 else None for column in table["columns"]]
     headers = [table["label"]] + [column[0] for column in table["columns"]]
+    difference, divisors = table.get("difference_per", (None, []))
+
+    if difference:
+        headers.append(difference)
 
     print(f"### {table['title']}\n")
     print("| " + " | ".join(headers) + " |")
-    print("| --- |" + " ---: |" * len(table["columns"]))
+    print("| --- |" + " ---: |" * (len(headers) - 1))
 
     first_row = [group.get(table["rows"][0]) for group in groups]
 
-    for row in table["rows"]:
+    for number, row in enumerate(table["rows"]):
         values = [group.get(row) for group in groups]
 
         if table.get("divide_by"):
@@ -220,6 +237,11 @@ def render(table: dict, directory: Path) -> None:
                 cells.append(f"{value:,}")
             else:
                 cells.append(f"{value:,} ({(value - baseline) / baseline:+.0%})")
+
+        if difference and None not in (values[0], values[-1]):
+            cells.append(f"{round((values[-1] - values[0]) / divisors[number]):,}")
+        elif difference:
+            cells.append("–")
 
         print(f"| {row} | " + " | ".join(cells) + " |")
 
