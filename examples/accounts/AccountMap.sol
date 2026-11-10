@@ -17,7 +17,7 @@ import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 // entries by key alone:
 //
 //     ACCOUNTS.map().rebalance(placements); // PagePack.Placement(accountKey(owner), index)
-//     ACCOUNTS.map().useHints(hints);       // PagePack.Hint(key, ACCOUNTS.map().hintOf(key))
+//     ACCOUNTS.map().useHints(hints);       // from ACCOUNTS.map().packedHintsOf(keys), offchain
 
 /// Two slots.
 struct Account {

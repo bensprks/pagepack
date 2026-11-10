@@ -1,7 +1,7 @@
 {
   "Move a 3-slot entry within a page": "52883",
-  "Pack a 1-slot entry into a gap": "115501",
-  "Pack a 2-slot entry into a gap": "161708",
-  "Pack a 2-slot entry, moving 32 entries": "347588",
-  "Pack a 2-slot entry, moving 62 slots": "242188"
+  "Pack a 1-slot entry into a gap": "115568",
+  "Pack a 2-slot entry into a gap": "161775",
+  "Pack a 2-slot entry, moving 32 entries": "347655",
+  "Pack a 2-slot entry, moving 62 slots": "242255"
 }

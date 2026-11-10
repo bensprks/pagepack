@@ -44,12 +44,18 @@ contract PackedExchange is Exchange {
         return ENTRIES.map().hintOf(key);
     }
 
+    /// @notice The `hints` argument for a call that touches the entries under `keys`, from
+    ///         ExchangeMap.sol: 5 bytes for each, in one `eth_call`.
+    function hintsFor(bytes32[] calldata keys) external view returns (bytes memory) {
+        return ENTRIES.map().packedHintsOf(keys);
+    }
+
     function entriesPerPage() external view returns (uint256) {
         return ENTRIES.map().entriesPerPage();
     }
 
     /// PagePack keeps the hints in transient storage, and every lookup picks them up.
-    function _useHints(PagePack.Hint[] calldata hints) internal override {
+    function _useHints(bytes calldata hints) internal override {
         ENTRIES.map().useHints(hints);
     }
 

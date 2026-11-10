@@ -38,6 +38,16 @@ contract PackedBalances {
         return BALANCES.hintOf(key);
     }
 
+    /// The hints {bumpPositional} takes for `keys`: 2 bytes for each key, in order.
+    function hintsOf(bytes32[] calldata keys) external view returns (bytes memory) {
+        return BALANCES.hintsOf(keys);
+    }
+
+    /// The hints {bumpLoaded} takes for `keys`: 5 bytes for each key that has one.
+    function packedHintsOf(bytes32[] calldata keys) external view returns (bytes memory) {
+        return BALANCES.packedHintsOf(keys);
+    }
+
     function seed(bytes32[] calldata keys) external {
         for (uint256 i; i < keys.length; ++i) {
             BALANCES.find(keys[i]).write(0, 1_000);
@@ -55,9 +65,28 @@ contract PackedBalances {
         }
     }
 
+    /// Loads 5-byte hints once, in any order, then looks each key up without one.
+    function bumpLoaded(bytes32[] calldata keys, bytes calldata hints) external {
+        BALANCES.useHints(hints);
+
+        for (uint256 i; i < keys.length; ++i) {
+            Entry e = BALANCES.find(keys[i]);
+            e.write(0, e.read(0) + 1);
+        }
+    }
+
+    /// Passes each lookup its hint, a word for each key.
     function bump(bytes32[] calldata keys, uint256[] calldata hints) external {
         for (uint256 i; i < keys.length; ++i) {
             Entry e = BALANCES.find(keys[i], hints[i]);
+            e.write(0, e.read(0) + 1);
+        }
+    }
+
+    /// Passes each lookup its hint, 2 bytes for each key.
+    function bumpPositional(bytes32[] calldata keys, bytes calldata hints) external {
+        for (uint256 i; i < keys.length; ++i) {
+            Entry e = BALANCES.find(keys[i], PagePack.hintAt(hints, i));
             e.write(0, e.read(0) + 1);
         }
     }

@@ -4,7 +4,6 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {PagePack} from "pagepack/PagePack.sol";
 import {Account, Market, Order, Position} from "./ExchangeMap.sol";
 
 /// @title Exchange
@@ -81,8 +80,9 @@ abstract contract Exchange {
         _;
     }
 
-    /// Hands the caller's hints to the storage backend before the function body runs.
-    modifier withHints(PagePack.Hint[] calldata hints) {
+    /// Hands the caller's hints to the storage backend before the function body runs. The
+    /// backend defines the bytes: the PagePack version takes 5 for each entry, in any order.
+    modifier withHints(bytes calldata hints) {
         _useHints(hints);
         _;
     }
@@ -135,7 +135,7 @@ abstract contract Exchange {
         emit Deposited(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount, PagePack.Hint[] calldata hints) external withHints(hints) {
+    function withdraw(uint256 amount, bytes calldata hints) external withHints(hints) {
         Account storage account = _account(msg.sender);
         (uint256 balance, uint256 locked, uint256 markets) =
             (account.balance, account.locked, account.markets);
@@ -158,7 +158,7 @@ abstract contract Exchange {
     ///         every market the caller holds a position in.
     /// @dev This is the hot path on Perpl's mainnet: almost every transaction is a market maker
     ///      moving one to a few quotes.
-    function requote(QuoteUpdate[] calldata updates, PagePack.Hint[] calldata hints)
+    function requote(QuoteUpdate[] calldata updates, bytes calldata hints)
         external
         withHints(hints)
     {
@@ -207,7 +207,7 @@ abstract contract Exchange {
     ///        version. If the maker re-quotes that order slot first, the fill takes the new order.
     ///      - Only the taker's margin is checked. A fill can leave a maker under-margined, e.g.
     ///        an ask far below the mark price; a real exchange checks the maker or liquidates.
-    function settle(address taker, Fill[] calldata fills, PagePack.Hint[] calldata hints)
+    function settle(address taker, Fill[] calldata fills, bytes calldata hints)
         external
         withHints(hints)
     {
@@ -292,7 +292,7 @@ abstract contract Exchange {
     function _market(uint8 market) internal view virtual returns (Market storage);
 
     /// Makes `hints` available to every lookup in this transaction.
-    function _useHints(PagePack.Hint[] calldata hints) internal virtual;
+    function _useHints(bytes calldata hints) internal virtual;
 
     // ------------------------------------------------------------------------------------------
     // Entries located once per call
