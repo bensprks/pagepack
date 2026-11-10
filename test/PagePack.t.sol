@@ -538,6 +538,53 @@ contract PagePackTest is Test {
         _assertNotRead(_reads(), _directory());
     }
 
+    function test_hintsOfGivesEveryKeyTwoBytes() public {
+        HintStore hints = _hintStore(false);
+        bytes32[] memory keys = _uniqueKeys(4);
+        _pack(keys[0], 9);
+        _pack(keys[2], 1023);
+
+        // The highest index's hint needs its high byte. Keys 1 and 3 are at home, and this
+        // map has no hint for them, but each still takes its 2 bytes.
+        bytes memory run = hints.hintsOf(keys);
+        assertEq(run, hex"000a000004000000");
+
+        for (uint256 i; i < keys.length; ++i) {
+            assertEq(hints.hintAt(run, i), store.hintOf(keys[i]));
+        }
+
+        // So the hint after a key without one is still read at its own position.
+        uint256 expected = store.slotOf(keys[2]);
+
+        vm.record();
+        assertEq(hints.slotOfAt(keys[2], run, 2), expected);
+        _assertNotRead(_reads(), _directory());
+
+        assertEq(hints.hintsOf(new bytes32[](0)).length, 0);
+    }
+
+    function test_hintsOfGivesHomeHintsInHomeHintMaps() public {
+        HintStore hints = _hintStore(true);
+        bytes32[] memory keys = _uniqueKeys(4);
+        _pack(keys[0], 9);
+        _pack(keys[2], 2);
+
+        bytes memory run = hints.hintsOf(keys);
+        assertEq(run, hex"000a040100030401");
+
+        uint256[] memory expected = new uint256[](keys.length);
+        for (uint256 i; i < keys.length; ++i) {
+            expected[i] = store.slotOf(keys[i]);
+        }
+
+        // Every key has a hint, so no lookup needs the directory.
+        vm.record();
+        for (uint256 i; i < keys.length; ++i) {
+            assertEq(hints.slotOfAt(keys[i], run, i), expected[i]);
+        }
+        _assertNotRead(_reads(), _directory());
+    }
+
     function test_hintAtReadsTwoByteHints() public {
         HintStore hints = _hintStore(false);
         bytes memory run = abi.encodePacked(uint16(1), uint16(PagePack.HOME), uint16(0xabcd));

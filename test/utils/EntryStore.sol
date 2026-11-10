@@ -120,6 +120,10 @@ contract HintStore is EntryStoreBase {
         return MAP.packedHintsOf(keys);
     }
 
+    function hintsOf(bytes32[] calldata keys) external view returns (bytes memory) {
+        return MAP.hintsOf(keys);
+    }
+
     /// Loads the first `length` bytes of `hints`, then looks `key` up, all in one call.
     function slotOfWithHints(bytes calldata hints, uint256 length, bytes32 key)
         external

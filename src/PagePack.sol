@@ -86,7 +86,8 @@ using PagePack for Entry global;
 /// A hint is a packed index plus one, or HOME. It reaches a lookup in one of two ways: passed to
 /// {find}(key, hint), or loaded once with {useHints}, which keeps it in transient storage for
 /// the rest of the transaction, where {find}(key) looks for it. A loaded hint is stored under
-/// its entry's fingerprint, not its key, so calldata carries 5 bytes per hint and no keys.
+/// its entry's fingerprint, not its key, so calldata carries 5 bytes per hint and no keys. A
+/// hint passed to a lookup needs no fingerprint, and travels as 2 bytes ({hintsOf}, {hintAt}).
 /// Entries that share a fingerprint share the hint, which is safe because a hint only says
 /// where to look: every hint, however it arrived, is checked against the tag or the flag. One
 /// that is wrong, stale or meant for another entry costs a directory search and never returns
@@ -605,7 +606,8 @@ library PagePack {
     /// @notice The hint for `key`: its packed index plus one. An entry that isn't packed has
     ///         HOME in a home-hint map, and 0 (no hint) elsewhere.
     /// @dev The value {find}(key, hint) takes. Meant to be called offchain (via an eth_call
-    ///      wrapper) to build hints for a batch: 2 bytes each, big-endian, for {hintAt}.
+    ///      wrapper). {hintsOf} returns it for a list of keys, 2 bytes each.
+    /// @return The hint as a number, at most 1,025, so it fits 2 bytes.
     function hintOf(PagedMap m, bytes32 key) internal view returns (uint256) {
         return _hintOf(m, _identity(m, key));
     }
@@ -614,6 +616,7 @@ library PagePack {
     ///         its {hintOf}. Zero if there is no hint to give: an entry that isn't packed, in a
     ///         map without home flags.
     /// @dev Meant to be called offchain. A real packed hint is never zero.
+    /// @return 5 bytes, or 0 for no hint.
     function packedHintOf(PagedMap m, bytes32 key) internal view returns (bytes5) {
         uint256 id = _identity(m, key);
         uint256 hint = _hintOf(m, id);
@@ -629,6 +632,8 @@ library PagePack {
     ///         hint to give are left out, so the result can be shorter than 5 bytes a key.
     /// @dev Meant to be called offchain: expose it in an external view function, and one
     ///      eth_call builds a transaction's hints. Keys can be of any kind, in any order.
+    /// @return hints 5 bytes for each key that has a hint, in the order of `keys`: at most
+    ///         `5 * keys.length` bytes.
     function packedHintsOf(PagedMap m, bytes32[] memory keys)
         internal
         view
@@ -654,15 +659,38 @@ library PagePack {
         }
     }
 
+    /// @notice The hints for `keys` as the bytes {hintAt} reads: each key's {hintOf} in 2 bytes,
+    ///         big-endian, in the order of `keys`. A key with no hint still takes its 2 bytes,
+    ///         as zero, so every hint stays at its key's position.
+    /// @dev Meant to be called offchain: expose it in an external view function, and one
+    ///      eth_call builds a transaction's hints. Pass the keys in the order the function
+    ///      looks them up.
+    /// @return hints 2 bytes for each key, in the order of `keys`: `2 * keys.length` bytes.
+    function hintsOf(PagedMap m, bytes32[] memory keys) internal view returns (bytes memory hints) {
+        hints = new bytes(2 * keys.length);
+
+        for (uint256 i; i < keys.length; ++i) {
+            uint256 hint = m.hintOf(keys[i]);
+
+            // The hint's high byte, then its low byte: mstore8 stores the lowest byte.
+            assembly ("memory-safe") {
+                let at := add(add(hints, 0x20), shl(1, i))
+                mstore8(at, shr(8, hint))
+                mstore8(add(at, 1), hint)
+            }
+        }
+    }
+
     /// @notice Hint `i` in a run of 2-byte hints, or 0 (no hint) past its end. For a function
     ///         that already loops over its keys and gives each lookup its own hint:
     ///
     ///             BALANCES.find(keys[i], PagePack.hintAt(hints, i));
     ///
     /// @dev Each hint is its key's {hintOf}, big-endian, in the order the function looks its
-    ///      keys up. Costs less than {useHints}, which stores each hint and reads it back, but
-    ///      only fits calls whose lookups follow an order the caller knows. A caller can send
-    ///      fewer hints than keys, or none.
+    ///      keys up, as {hintsOf} builds them. Costs less than {useHints}, which stores each
+    ///      hint and reads it back, but only fits calls whose lookups follow an order the
+    ///      caller knows. A caller can send fewer hints than keys, or none.
+    /// @return hint The hint as a number, read from 2 bytes.
     function hintAt(bytes calldata hints, uint256 i) internal pure returns (uint256 hint) {
         // Runs for every lookup of a batch, so the bounds check multiplies rather than
         // branches: a branch costs more, and keeps the compiler from inlining this.
