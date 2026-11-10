@@ -7,24 +7,24 @@ schedule.
 ## Results
 
 Updating existing one-slot balances in one transaction. Each figure is the whole transaction's
-gas, so it includes the calldata that carries the keys and the hints. Hinted transactions send 5
-bytes per entry and load them with `useHints`. [Hint styles](#hint-styles) compares that with
-passing each lookup its hint:
+gas, so it includes the calldata that carries the keys and the hints. Hinted transactions pass
+each lookup a 2-byte hint, the cheapest style. [Hint styles](#hint-styles) compares it with
+loading hints once with `useHints`, which is simpler and is what the README's usage example does:
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,046 (+28%) | 35,245 (+5%) |
-| 2 entries | 45,321 | 45,380 (+0%) | 37,038 (-18%) |
-| 10 entries | 139,537 | 65,886 (-53%) | 51,690 (-63%) |
-| 30 entries | 375,029 | 118,576 (-68%) | 88,186 (-76%) |
-| 64 entries, a full page | 775,423 | 208,822 (-73%) | 150,364 (-81%) |
-| 30 entries, 3 pages | 375,029 | 139,051 (-63%) | 109,774 (-71%) |
-| 2 unpacked entries | 45,309 | 56,540 (+25%) | – |
-| 2 unpacked entries, home-hint map | 45,309 | 57,098 (+26%) | 47,814 (+6%) |
+| 1 entry | 33,556 | 43,068 (+28%) | 34,773 (+4%) |
+| 2 entries | 45,321 | 45,402 (+0%) | 36,254 (-20%) |
+| 10 entries | 139,537 | 65,908 (-53%) | 48,210 (-65%) |
+| 30 entries | 375,029 | 118,598 (-68%) | 78,150 (-79%) |
+| 64 entries, a full page | 775,423 | 208,844 (-73%) | 129,144 (-83%) |
+| 30 entries, 3 pages | 375,029 | 139,073 (-63%) | 100,110 (-73%) |
+| 2 unpacked entries | 45,309 | 56,562 (+25%) | – |
+| 2 unpacked entries, home-hint map | 45,309 | 57,120 (+26%) | 46,882 (+3%) |
 
 The saving grows with batch size. Without hints, single-entry writes and entries that were never
 packed cost more than a mapping, because finding an entry costs gas too. In a map that keeps home
-flags, a `HOME` hint brings an entry that was never packed within 6% of a mapping entry, at a
+flags, a `HOME` hint brings an entry that was never packed within 4% of a mapping entry, at a
 [storage cost](#home-hints-or-compact-storage).
 
 The table uses one set of keys. Without a hint, a lookup searches the directory, and how many
@@ -33,8 +33,8 @@ percent more or less. Over 16 key sets, each with 494 entries packed:
 
 | Entries updated in one tx | No hint, mean | No hint, lowest | No hint, highest | Hinted, mean |
 | --- | ---: | ---: | ---: | ---: |
-| 10 entries | 68,260 | 66,398 | 70,512 | 51,663 |
-| 64 entries, a full page | 216,838 | 200,552 | 230,171 | 150,376 |
+| 10 entries | 68,282 | 66,420 | 70,534 | 48,209 |
+| 64 entries, a full page | 216,860 | 200,574 | 230,193 | 129,125 |
 
 Compare unhinted costs across versions or layouts by their mean. Hinted lookups skip the search,
 so their cost barely depends on the keys.
@@ -239,18 +239,20 @@ A contract takes hints in one of two ways:
   lookups are spread through the code, as in the [exchange example](../examples/exchange).
 - **Passed to each lookup.** A function that already loops over its keys calls
   `find(keys[i], hint)`. `PagePack.hintAt(hints, i)` reads hint `i` from a `bytes` argument of
-  2-byte big-endian hints, each its key's `hintOf`, in the order of the lookups. Past the end it
-  returns 0, no hint. This style costs less, because nothing is stored and read back, but the
-  caller has to know the order of the lookups.
+  2-byte big-endian hints, each its key's `hintOf`, in the order of the lookups. `hintsOf(keys)`
+  builds that argument. A key with no hint still takes 2 bytes, as zero, so the hints after it
+  keep their positions. Past the end `hintAt` returns 0, no hint. This style costs the least,
+  because nothing is stored and read back, but the caller has to know the order of the lookups.
+  A typed map needs a getter that takes the hint and passes it to `find(key, hint)`.
 
 The same batch update with each style, and with a `uint256[]` that spends a word on each hint:
 
 | Entries updated in one tx | No hint | `useHints`, 5 bytes a hint | `find(key, hint)`, a word a hint | `find(key, hint)`, 2 bytes a hint |
 | --- | ---: | ---: | ---: | ---: |
-| 1 entry | 43,046 | 35,245 (-18%) | 34,868 (-19%) | 34,751 (-19%) |
-| 10 entries | 65,886 | 51,690 (-22%) | 49,520 (-25%) | 48,188 (-27%) |
-| 30 entries | 118,576 | 88,186 (-26%) | 82,032 (-31%) | 78,128 (-34%) |
-| 64 entries, a full page | 208,822 | 150,364 (-28%) | 137,360 (-34%) | 129,122 (-38%) |
+| 1 entry | 43,068 | 35,267 (-18%) | 34,890 (-19%) | 34,773 (-19%) |
+| 10 entries | 65,908 | 51,712 (-22%) | 49,542 (-25%) | 48,210 (-27%) |
+| 30 entries | 118,598 | 88,208 (-26%) | 82,054 (-31%) | 78,150 (-34%) |
+| 64 entries, a full page | 208,844 | 150,386 (-28%) | 137,382 (-34%) | 129,144 (-38%) |
 
 A loaded hint is kept in transient storage at the directory's slot plus the fingerprint, so two
 keys with the same fingerprint share one. That is safe because a lookup checks a loaded hint
