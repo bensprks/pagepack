@@ -261,12 +261,12 @@ holds, mostly MIP-8's charge for new storage slots. Slots that are still zero co
 
 | Packing from home, 16 entries per call | Gas per entry |
 | --- | ---: |
-| 1-slot entries | 61,931 |
-| 3-slot entries | 97,734 |
-| 8-slot entries | 188,752 |
-| 8-slot entries, 1 slot set | 65,902 |
-| 1-slot entries, never written | 41,581 |
-| 1-slot entries, never written, home-hint map | 61,952 |
+| 1-slot entries | 61,934 |
+| 3-slot entries | 97,736 |
+| 8-slot entries | 188,755 |
+| 8-slot entries, 1 slot set | 65,905 |
+| 1-slot entries, never written | 41,584 |
+| 1-slot entries, never written, home-hint map | 61,955 |
 
 Filling a map of 1,016 one-slot entries takes about 58M gas, so split large migrations into
 transactions sized from the table above. Listing new entries in fingerprint order also skips a
@@ -279,23 +279,33 @@ directory once per call, which grows with the number of packed entries. Evicting
 | Operation (one-slot entries, incl. 21,000 tx base) | 64 packed | 512 packed | 1,016 packed |
 | --- | ---: | ---: | ---: |
 | Empty rebalance | 22,006 | 22,006 | 22,006 |
-| Swap two entries | 60,804 | 61,939 | 61,987 |
-| Move one entry | 111,968 | 112,533 | 120,651 |
-| Evict one entry | 95,534 | 157,469 | 228,237 |
-| Replace one entry with another | 139,677 | 200,784 | 270,608 |
-| Resubmit the whole layout | 173,769 | 1,227,057 | 2,415,793 |
+| Swap two entries | 60,846 | 61,981 | 62,029 |
+| Move one entry | 112,010 | 112,575 | 120,693 |
+| Evict one entry | 95,576 | 157,511 | 228,279 |
+| Replace one entry with another | 139,719 | 200,826 | 270,650 |
+| Resubmit the whole layout | 173,811 | 1,227,099 | 2,415,835 |
 
-Sliding entries together costs about 7,000 gas for each entry moved, plus about 2,000 for each
+Sliding entries together costs 6,000 to 7,000 gas for each entry moved, plus about 2,000 for each
 of its slots after the first, and only the call that needs it pays. So a page of many small
 entries costs more to compact than a page of a few wide ones. On a full page of 64 tags and 64
 data slots, after some of its entries left:
 
 | Page before the call | Operation | Gas |
 | --- | --- | ---: |
-| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,785 |
-| | Pack a 2-slot entry, moving 62 slots | 254,016 |
-| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 161,992 |
-| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 386,506 |
+| Entries of 30 and 32 slots, two one-slot gaps | Pack a 1-slot entry into a gap | 115,827 |
+| | Pack a 2-slot entry, moving 62 slots | 242,852 |
+| 32 one-slot entries, 16 two-slot gaps | Pack a 2-slot entry into a gap | 162,034 |
+| 32 one-slot entries, 32 one-slot gaps | Pack a 2-slot entry, moving 32 entries | 353,322 |
+
+One call can make room on many pages, and a page costs the same to compact whatever else the
+call does. Take full pages of 64 one-slot entries, and a call that on each page evicts 32 of them
+and packs 16 two-slot entries. Evicted two by two, they leave gaps that fit. Evicted every other
+one, they leave none, so every page compacts:
+
+| Pages in one call | Gaps fit | Pages compact | Compacting, per page |
+| --- | ---: | ---: | ---: |
+| 1 page | 1,582,526 | 1,811,792 | 229,266 |
+| 8 pages | 12,556,828 | 14,374,276 | 227,181 |
 
 ### Why entries don't pack themselves
 

@@ -1026,6 +1026,98 @@ contract PagePackTest is Test {
         }
     }
 
+    /// One request makes room on two pages. On the first, an entry arrives before the one that
+    /// finds no gap and another after it, and the request also moves a staying entry to another
+    /// index. On each page the staying entries' data ends up together, in the order it sat, and
+    /// the arriving entries follow in placement order.
+    function test_compactsSeveralPagesInOneRequest() public {
+        bytes32[] memory keys = _fillTwoPages();
+        (bytes32 x, bytes32 w, bytes32 v) = (_key(0, 20), _key(1, 21), _key(1, 22));
+        _fillAll(x, 2100);
+        _fillAll(w, 2200);
+        _fillAll(v, 2300);
+
+        PagePack.Placement[] memory placements = new PagePack.Placement[](13);
+
+        // Page 0 loses five one-slot entries, none next to another: slots 83, 103, 123, 125, 127.
+        for (uint256 i; i < 5; ++i) {
+            placements[i] = PagePack.Placement(keys[2 * i + 1], PagePack.HOME);
+        }
+
+        // One slot fits the first gap. Two slots fit none, so the page compacts. An entry from
+        // page 1 arrives after that, and a 19-slot entry moves to another index on the page.
+        placements[5] = PagePack.Placement(x, 1);
+        placements[6] = PagePack.Placement(w, 3);
+        placements[7] = PagePack.Placement(keys[10], 5);
+        placements[8] = PagePack.Placement(keys[4], 7);
+
+        // Page 1 is left with four one-slot gaps, at 64, 84, 123 and 125, and compacts too.
+        placements[9] = PagePack.Placement(keys[12], PagePack.HOME);
+        placements[10] = PagePack.Placement(keys[15], PagePack.HOME);
+        placements[11] = PagePack.Placement(keys[17], PagePack.HOME);
+        placements[12] = PagePack.Placement(v, 66);
+
+        store.rebalance(placements);
+
+        // Page 0: the entry at slot 64 was in place; the rest slid down in the order they sat.
+        _assertPacked(keys[0], 0, 64);
+        _assertPacked(keys[2], 2, 83);
+        _assertPacked(keys[4], 7, 102);
+        _assertPacked(keys[6], 6, 121);
+        _assertPacked(keys[8], 8, 122);
+        _assertPacked(x, 1, 123);
+        _assertPacked(w, 3, 124);
+        _assertPacked(keys[10], 5, 126);
+
+        // Page 1.
+        _assertPacked(keys[11], 65, 64);
+        _assertPacked(keys[13], 67, 83);
+        _assertPacked(keys[14], 68, 102);
+        _assertPacked(keys[16], 70, 121);
+        _assertPacked(keys[18], 72, 122);
+        _assertPacked(keys[19], 73, 123);
+        _assertPacked(v, 66, 124);
+
+        assertEq(store.packedCount(), 15);
+
+        for (uint256 i; i < 20; ++i) {
+            _assertAll(keys[i], 100 * (i + 1));
+        }
+
+        _assertAll(x, 2100);
+        _assertAll(w, 2200);
+        _assertAll(v, 2300);
+    }
+
+    /// Compacting leaves a page's free slots in one run, so an entry that then finds no room
+    /// finds the page full.
+    function test_revertsWhenACompactedPageFills() public {
+        bytes32[] memory keys = _fillTwoPages();
+
+        // Five one-slot gaps on page 0, for entries of one, two and two slots, and then one more.
+        PagePack.Placement[] memory placements = new PagePack.Placement[](9);
+
+        for (uint256 i; i < 5; ++i) {
+            placements[i] = PagePack.Placement(keys[2 * i + 1], PagePack.HOME);
+        }
+
+        placements[5] = PagePack.Placement(_key(0, 20), 1);
+        placements[6] = PagePack.Placement(_key(1, 21), 3);
+        placements[7] = PagePack.Placement(_key(1, 22), 5);
+        placements[8] = PagePack.Placement(_key(0, 23), 7);
+
+        vm.expectRevert(abi.encodeWithSelector(PagePack.PageFull.selector, 0));
+        store.rebalance(placements);
+
+        // Without the last one, the rest fill the page exactly.
+        _truncate(placements, 8);
+        store.rebalance(placements);
+
+        _assertPacked(_key(0, 20), 1, 123);
+        _assertPacked(_key(1, 21), 3, 124);
+        _assertPacked(_key(1, 22), 5, 126);
+    }
+
     function test_revertsWhenPageFull() public {
         uint256[] memory sizes = new uint256[](2);
         (sizes[0], sizes[1]) = (1, 64);
@@ -1317,6 +1409,41 @@ contract PagePackTest is Test {
         for (uint256 i; i < slots; ++i) {
             assertEq(store.get(key, i), value + i);
         }
+    }
+
+    /// Fills the 64 data slots of two pages with entries of 19 slots and of one, at indices 0 to
+    /// 9 and 64 to 73, their data in index order. Key i holds 100 * (i + 1) and up.
+    ///
+    ///   page 0   19 at slot 64, 1 at 83, 19 at 84, 1 at 103, 19 at 104, then 1 at each of 123 to 127
+    ///   page 1   1 at slot 64, 19 at 65, 1 at 84, 19 at 85, 19 at 104, then 1 at each of 123 to 127
+    function _fillTwoPages() internal returns (bytes32[] memory keys) {
+        // Kinds of 1, 2 and 19 slots, on pages of 64 tags and 64 data slots.
+        uint256[] memory sizes = new uint256[](3);
+        (sizes[0], sizes[1], sizes[2]) = (1, 2, 19);
+        store = new KindedEntryStore(sizes, 64, false);
+
+        // The keys that are 19 slots wide, a bit each.
+        uint256 wide = (1 << 0) | (1 << 2) | (1 << 4) | (1 << 11) | (1 << 13) | (1 << 14);
+        keys = new bytes32[](20);
+        PagePack.Placement[] memory placements = new PagePack.Placement[](20);
+
+        for (uint256 i; i < 20; ++i) {
+            bool isWide = (wide >> i) & 1 == 1;
+
+            keys[i] = _key(isWide ? 2 : 0, i);
+            _fillAll(keys[i], 100 * (i + 1));
+            placements[i] = PagePack.Placement(keys[i], i < 10 ? i : 54 + i);
+        }
+
+        store.rebalance(placements);
+    }
+
+    /// The entry is packed at `index`, with its data `offset` slots into that index's page.
+    function _assertPacked(bytes32 key, uint256 index, uint256 offset) internal view {
+        uint256 page = index / store.entriesPerPage();
+
+        assertEq(store.hintOf(key), index + 1);
+        assertEq(store.slotOf(key), _directory() + 128 * (page + 1) + offset);
     }
 
     function _fingerprint(bytes32 key) internal view returns (uint256) {
