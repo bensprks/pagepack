@@ -83,6 +83,16 @@ using PagePack for Entry global;
 /// transaction. A lookup with a correct hint skips the directory entirely: a packed index is
 /// checked against its tag, and a HOME hint (home-hint maps only) against the flag.
 ///
+/// A hint is a packed index plus one, or HOME. It reaches a lookup in one of two ways: passed to
+/// {find}(key, hint), or loaded once with {useHints}, which keeps it in transient storage for
+/// the rest of the transaction, where {find}(key) looks for it. A loaded hint is stored under
+/// its entry's fingerprint, not its key, so calldata carries 5 bytes per hint and no keys. A
+/// hint passed to a lookup needs no fingerprint, and travels as 2 bytes ({hintsOf}, {hintAt}).
+/// Entries that share a fingerprint share the hint, which is safe because a hint only says
+/// where to look: every hint, however it arrived, is checked against the tag or the flag. One
+/// that is wrong, stale or meant for another entry costs a directory search and never returns
+/// the wrong entry.
+///
 /// Storage layout of a map, all page-aligned:
 ///
 ///   D = keccak256(map) rounded down to a page boundary
@@ -92,6 +102,10 @@ using PagePack for Entry global;
 ///                        slots 0 .. T - 1     a tag per index, zero while the index is empty
 ///                        slots T .. 127       entries' data, wherever {rebalance} put it
 ///
+/// Transient storage of a map, until the transaction ends:
+///
+///   D + fingerprint    the hint loaded for entries with that 22-bit fingerprint, 0 for none
+///
 /// A tag is the entry's identity with its low 14 bits replaced by where its data starts on the
 /// page (bits 7 to 13) and its size in slots (bits 0 to 6). Lookups only ever read tags from the
 /// tag region, so nothing written into an entry's data can pose as a tag.
@@ -100,11 +114,6 @@ library PagePack {
     struct Placement {
         bytes32 key;
         uint256 index;
-    }
-
-    struct Hint {
-        bytes32 key;
-        uint256 hint;
     }
 
     /// An entry named in a rebalance: where it is and where it goes, as packed indices and as
@@ -168,6 +177,14 @@ library PagePack {
     // A hint is index + 1 or HOME. Plain literals, so that inline assembly can use them.
     uint256 private constant INDEX_LIMIT = 1024;
     uint256 private constant HOME_HINT = 1025;
+
+    // A loaded hint's transient slot is the directory's plus the entry's fingerprint: the top 22
+    // bits of its identity, as LibDirectory takes them. In calldata it is 5 bytes: the
+    // fingerprint above the hint, which fits 11 bits.
+    uint256 private constant FINGERPRINT_SHIFT = 234;
+    uint256 private constant HINT_BITS = 11;
+    uint256 private constant HINT_MASK = 0x7ff;
+    uint256 private constant PACKED_HINT_BYTES = 5;
 
     // A tag's low 14 bits: where the entry's data starts on its page, and its size. The bits
     // above are the entry's identity.
@@ -433,6 +450,12 @@ library PagePack {
     /// @dev Without a hint, every call searches the directory, which costs about 1,000 to 1,400
     ///      gas once its page is loaded. Look an entry up once per call and pass the Entry along
     ///      while nothing can rebalance.
+    ///
+    ///      A loaded hint is read from transient storage at the directory's slot plus the key's
+    ///      fingerprint, so it may have been loaded for another key with that fingerprint, or
+    ///      hold anything a caller sent. It is trusted no further than a hint passed to
+    ///      {find}(key, hint): a packed index must hold a tag with this key's identity, and HOME
+    ///      needs the key's home flag clear. Anything else falls through to the directory.
     function find(PagedMap m, bytes32 key) internal view returns (Entry e) {
         uint256 id;
         uint256 dir;
@@ -448,7 +471,7 @@ library PagePack {
             dir := and(keccak256(0x00, 0x20), not(127))
             perPage := and(shr(PER_PAGE_SHIFT, m), 0xff)
 
-            let hint := tload(id)
+            let hint := tload(add(dir, shr(FINGERPRINT_SHIFT, id)))
 
             if hint {
                 let index := sub(hint, 1)
@@ -540,37 +563,146 @@ library PagePack {
     /// @notice Remembers hints for the rest of the transaction, so {find} without a hint uses
     ///         them. Load a batch's hints once at the entry point instead of passing one to every
     ///         lookup.
-    /// @dev Hints live in transient storage under each entry's identity and vanish when the
-    ///      transaction ends. Checking for one costs {find} about 100 gas. Wrong or stale hints
-    ///      are as safe as they are with {find}(key, hint). One list can hold hints for entries
-    ///      of every kind.
-    function useHints(PagedMap m, Hint[] calldata hints) internal {
+    /// @dev `hints` is a run of 5-byte hints in any order, as {packedHintsOf} builds it. Each is
+    ///      big-endian: 7 zero bits, the entry's 22-bit fingerprint, then an 11-bit hint, the
+    ///      entry's packed index plus one or HOME. One run can hold hints for entries of every
+    ///      kind, but for one map only: call this once for each map.
+    ///
+    ///      Each hint is kept in transient storage at the directory's slot plus its fingerprint
+    ///      and vanishes when the transaction ends. Checking for one costs {find} about 100 gas.
+    ///
+    ///      Nothing here is checked, because {find} checks every hint it reads against the
+    ///      entry's tag or home flag. So a hint that is wrong, stale, out of range, or loaded for
+    ///      another key with the same fingerprint costs a directory search and never returns the
+    ///      wrong entry. Of two hints with one fingerprint the later is kept. Bytes left after
+    ///      the last whole hint are ignored, and a hint with any of its top 7 bits set lands in a
+    ///      slot no lookup reads.
+    function useHints(PagedMap m, bytes calldata hints) internal {
+        uint256 dir = _directory(m);
+
         assembly ("memory-safe") {
-            let end := add(hints.offset, shl(6, hints.length))
+            // Whole hints only. Each is the top 5 bytes of the word loaded at its start.
+            let whole := sub(hints.length, mod(hints.length, PACKED_HINT_BYTES))
+            let end := add(hints.offset, whole)
 
-            mstore(0x00, m)
-
-            for { let h := hints.offset } lt(h, end) { h := add(h, 0x40) } {
-                mstore(0x20, calldataload(h))
-                tstore(keccak256(0x00, 0x40), calldataload(add(h, 0x20)))
+            for { let p := hints.offset } lt(p, end) { p := add(p, PACKED_HINT_BYTES) } {
+                let hint := shr(216, calldataload(p))
+                tstore(add(dir, shr(HINT_BITS, hint)), and(hint, HINT_MASK))
             }
         }
     }
 
-    /// @notice Remembers one hint for the rest of the transaction. See {useHints}.
+    /// @notice Remembers one hint, as {hintOf} returns it, for the rest of the transaction. See
+    ///         {useHints}.
     function useHint(PagedMap m, bytes32 key, uint256 hint) internal {
-        uint256 id = _identity(m, key);
+        uint256 dir = _directory(m);
+        uint256 fingerprint = m.fingerprintOf(key);
 
         assembly ("memory-safe") {
-            tstore(id, hint)
+            tstore(add(dir, fingerprint), hint)
         }
     }
 
     /// @notice The hint for `key`: its packed index plus one. An entry that isn't packed has
     ///         HOME in a home-hint map, and 0 (no hint) elsewhere.
-    /// @dev Meant to be called offchain (via an eth_call wrapper) to build hints for a batch.
+    /// @dev The value {find}(key, hint) takes. Meant to be called offchain (via an eth_call
+    ///      wrapper). {hintsOf} returns it for a list of keys, 2 bytes each.
+    /// @return The hint as a number, at most 1,025, so it fits 2 bytes.
     function hintOf(PagedMap m, bytes32 key) internal view returns (uint256) {
-        (uint256 index,,) = _locate(_directory(m), m.entriesPerPage(), _identity(m, key));
+        return _hintOf(m, _identity(m, key));
+    }
+
+    /// @notice The hint for `key` as the 5 bytes {useHints} takes: the key's fingerprint above
+    ///         its {hintOf}. Zero if there is no hint to give: an entry that isn't packed, in a
+    ///         map without home flags.
+    /// @dev Meant to be called offchain. A real packed hint is never zero.
+    /// @return 5 bytes, or 0 for no hint.
+    function packedHintOf(PagedMap m, bytes32 key) internal view returns (bytes5) {
+        uint256 id = _identity(m, key);
+        uint256 hint = _hintOf(m, id);
+
+        if (hint == 0) return 0;
+
+        // A 22-bit fingerprint above an 11-bit hint is 33 bits, so the cast drops nothing.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return bytes5(uint40((LibDirectory.fingerprintOf(id) << HINT_BITS) | hint));
+    }
+
+    /// @notice The packed hints for `keys`, joined into the bytes {useHints} takes. Keys with no
+    ///         hint to give are left out, so the result can be shorter than 5 bytes a key.
+    /// @dev Meant to be called offchain: expose it in an external view function, and one
+    ///      eth_call builds a transaction's hints. Keys can be of any kind, in any order.
+    /// @return hints 5 bytes for each key that has a hint, in the order of `keys`: at most
+    ///         `5 * keys.length` bytes.
+    function packedHintsOf(PagedMap m, bytes32[] memory keys)
+        internal
+        view
+        returns (bytes memory hints)
+    {
+        // 27 spare bytes, so each hint can be written as a whole word.
+        hints = new bytes(PACKED_HINT_BYTES * keys.length + 27);
+        uint256 length;
+
+        for (uint256 i; i < keys.length; ++i) {
+            bytes5 hint = m.packedHintOf(keys[i]);
+            if (hint == 0) continue;
+
+            assembly ("memory-safe") {
+                mstore(add(add(hints, 0x20), length), hint)
+            }
+
+            length += PACKED_HINT_BYTES;
+        }
+
+        assembly ("memory-safe") {
+            mstore(hints, length)
+        }
+    }
+
+    /// @notice The hints for `keys` as the bytes {hintAt} reads: each key's {hintOf} in 2 bytes,
+    ///         big-endian, in the order of `keys`. A key with no hint still takes its 2 bytes,
+    ///         as zero, so every hint stays at its key's position.
+    /// @dev Meant to be called offchain: expose it in an external view function, and one
+    ///      eth_call builds a transaction's hints. Pass the keys in the order the function
+    ///      looks them up.
+    /// @return hints 2 bytes for each key, in the order of `keys`: `2 * keys.length` bytes.
+    function hintsOf(PagedMap m, bytes32[] memory keys) internal view returns (bytes memory hints) {
+        hints = new bytes(2 * keys.length);
+
+        for (uint256 i; i < keys.length; ++i) {
+            uint256 hint = m.hintOf(keys[i]);
+
+            // The hint's high byte, then its low byte: mstore8 stores the lowest byte.
+            assembly ("memory-safe") {
+                let at := add(add(hints, 0x20), shl(1, i))
+                mstore8(at, shr(8, hint))
+                mstore8(add(at, 1), hint)
+            }
+        }
+    }
+
+    /// @notice Hint `i` in a run of 2-byte hints, or 0 (no hint) past its end. For a function
+    ///         that already loops over its keys and gives each lookup its own hint:
+    ///
+    ///             BALANCES.find(keys[i], PagePack.hintAt(hints, i));
+    ///
+    /// @dev Each hint is its key's {hintOf}, big-endian, in the order the function looks its
+    ///      keys up, as {hintsOf} builds them. Costs less than {useHints}, which stores each
+    ///      hint and reads it back, but only fits calls whose lookups follow an order the
+    ///      caller knows. A caller can send fewer hints than keys, or none.
+    /// @return hint The hint as a number, read from 2 bytes.
+    function hintAt(bytes calldata hints, uint256 i) internal pure returns (uint256 hint) {
+        // Runs for every lookup of a batch, so the bounds check multiplies rather than
+        // branches: a branch costs more, and keeps the compiler from inlining this.
+        assembly ("memory-safe") {
+            let within := lt(i, shr(1, hints.length))
+            hint := mul(within, shr(240, calldataload(add(hints.offset, shl(1, i)))))
+        }
+    }
+
+    /// The hint for the entry with `id`. See {hintOf}.
+    function _hintOf(PagedMap m, uint256 id) private view returns (uint256) {
+        (uint256 index,,) = _locate(_directory(m), m.entriesPerPage(), id);
 
         if (index != AT_HOME) return index + 1;
         return m.homeHints() ? HOME : 0;

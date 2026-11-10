@@ -34,6 +34,22 @@ TABLES = [
         ],
     },
     {
+        "title": "Library: the same update by hint style",
+        "label": "Entries updated",
+        "columns": [
+            ("No hint", "pagepack"),
+            ("`useHints`, 5 bytes a hint", "pagepack-hinted-loaded"),
+            ("`find(key, hint)`, a word a hint", "pagepack-hinted-words"),
+            ("`find(key, hint)`, 2 bytes a hint", "pagepack-hinted"),
+        ],
+        "rows": [
+            "1 entry",
+            "10 entries",
+            "30 entries",
+            "64 entries, a full page",
+        ],
+    },
+    {
         "title": "Library: updating packed one-slot entries over 16 key sets",
         "label": "Entries updated",
         "columns": [

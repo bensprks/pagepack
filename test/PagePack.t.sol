@@ -3,12 +3,12 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {PagePack, PagedMap} from "pagepack/PagePack.sol";
-import {EntryStore, EntryStoreBase, KindedEntryStore} from "./utils/EntryStore.sol";
+import {EntryStore, EntryStoreBase, HintStore, KindedEntryStore} from "./utils/EntryStore.sol";
 
 /// Loads hints in one call to the store and looks an entry up in another, as a contract would
 /// within one transaction.
 contract HintedCaller {
-    function loadThenFind(EntryStoreBase store, PagePack.Hint[] calldata hints, bytes32 key)
+    function loadThenFind(EntryStoreBase store, bytes calldata hints, bytes32 key)
         external
         returns (uint256)
     {
@@ -223,7 +223,7 @@ contract PagePackTest is Test {
         _fill(key, 10);
         _pack(key, 3);
         uint256 expected = store.slotOf(key);
-        PagePack.Hint[] memory hints = _hint(key, 4);
+        bytes memory hints = _hint(key, 4);
 
         vm.record();
         assertEq(store.slotOfWithHints(hints, key), expected);
@@ -263,6 +263,372 @@ contract PagePackTest is Test {
         assertEq(store.slotOfWithHints(_hint(b, 500), b), store.slotOf(b, 2));
         assertEq(store.slotOfWithHints(_hint(b, PagePack.HOME), b), store.slotOf(b, 2));
         assertEq(store.slotOfWithHints(_hint(_key(3), 1), _key(3)), _home(_key(3)));
+    }
+
+    function test_packedHintIsFingerprintAboveHint() public {
+        HintStore hints = _hintStore(true);
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _pack(a, 7);
+
+        assertEq(uint40(hints.packedHintOf(a)), (store.fingerprintOf(a) << 11) | 8);
+        assertEq(uint40(hints.packedHintOf(b)), (store.fingerprintOf(b) << 11) | PagePack.HOME);
+
+        // Without home flags there is no hint to give for an entry that isn't packed.
+        hints = _hintStore(false);
+        _pack(a, 7);
+
+        assertEq(hints.packedHintOf(a), _packedHint(a, 8));
+        assertEq(hints.packedHintOf(b), bytes5(0));
+    }
+
+    function test_packedHintsServePackedAndHomeEntries() public {
+        HintStore hints = _hintStore(true);
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 7);
+        uint256 packedAt = store.slotOf(a);
+
+        bytes memory loaded = bytes.concat(hints.packedHintOf(a), hints.packedHintOf(b));
+
+        vm.record();
+        assertEq(store.slotOfWithHints(loaded, a), packedAt);
+        assertEq(store.slotOfWithHints(loaded, b), _home(b));
+
+        // One read each, a's tag and b's flag: neither lookup loaded the directory.
+        bytes32[] memory reads = _reads();
+        assertEq(reads.length, 2);
+        assertEq(uint256(reads[0]), _tagSlot(7));
+        assertEq(uint256(reads[1]), _home(b) + 127);
+    }
+
+    function test_packedHintsLoadInAnyOrder() public {
+        bytes32[] memory keys = _uniqueKeys(6);
+        uint256[6] memory indices = [uint256(0), 70, 3, 200, 64, 5];
+        PagePack.Placement[] memory placements = new PagePack.Placement[](keys.length);
+        bytes memory forward;
+        bytes memory backward;
+
+        for (uint256 i; i < keys.length; ++i) {
+            placements[i] = PagePack.Placement(keys[i], indices[i]);
+            forward = bytes.concat(forward, _hint(keys[i], indices[i] + 1));
+            backward = bytes.concat(_hint(keys[i], indices[i] + 1), backward);
+        }
+
+        store.rebalance(placements);
+
+        for (uint256 i; i < keys.length; ++i) {
+            uint256 expected = store.slotOf(keys[i]);
+
+            vm.record();
+            assertEq(store.slotOfWithHints(forward, keys[i]), expected);
+            assertEq(store.slotOfWithHints(backward, keys[i]), expected);
+            _assertNotRead(_reads(), _directory());
+        }
+    }
+
+    function test_stalePackedHintsFallBackToDirectory() public {
+        bytes32 a = _key(1);
+        bytes32 b = _key(2);
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 0);
+        bytes memory hints = _hint(a, 1);
+
+        // a moves and b takes its index, so a's hint now points at b's tag.
+        PagePack.Placement[] memory placements = new PagePack.Placement[](2);
+        placements[0] = PagePack.Placement(a, 40);
+        placements[1] = PagePack.Placement(b, 0);
+        store.rebalance(placements);
+        uint256 expected = store.slotOf(a);
+
+        vm.record();
+        assertEq(store.slotOfWithHints(hints, a), expected);
+        _assertRead(_reads(), _directory());
+
+        // a goes home and b's index empties.
+        placements[0] = PagePack.Placement(a, PagePack.HOME);
+        placements[1] = PagePack.Placement(b, 9);
+        store.rebalance(placements);
+
+        assertEq(store.slotOfWithHints(hints, a), _home(a));
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
+    function test_keysSharingAFingerprintShareALoadedHint() public {
+        _assertSharedHintIsSafe(false);
+    }
+
+    function test_keysSharingAFingerprintShareALoadedHintInHomeHintMaps() public {
+        _assertSharedHintIsSafe(true);
+    }
+
+    /// Two keys with one fingerprint, a packed and b at home: a hint loaded for either is read
+    /// by lookups of both, and both still find their own entry.
+    function _assertSharedHintIsSafe(bool homeHints) internal {
+        store = new EntryStore(3, 0, homeHints);
+        (bytes32 a, bytes32 b) = _collidingKeys();
+        _fill(a, 10);
+        _fill(b, 20);
+        _pack(a, 5);
+        uint256 packedAt = store.slotOf(a);
+
+        // A hint names a fingerprint, not a key, so a's is b's too.
+        bytes memory forA = _hint(a, 6);
+        bytes memory forB = _hint(b, PagePack.HOME);
+        assertEq(_hint(b, 6), forA);
+
+        // a's hint serves a: one read, its tag.
+        vm.record();
+        assertEq(store.slotOfWithHints(forA, a), packedAt);
+        assertEq(_reads().length, 1);
+
+        // b reads it too, finds a's tag at that index and falls back to the directory, which
+        // lists the fingerprint for a.
+        vm.record();
+        assertEq(store.slotOfWithHints(forA, b), _home(b));
+        _assertRead(_reads(), _directory());
+
+        // HOME under the same fingerprint: right for b where the map keeps home flags, and
+        // only a wrong hint for a, whose flag is set.
+        vm.record();
+        assertEq(store.slotOfWithHints(forB, b), _home(b));
+        if (homeHints) assertEq(_reads().length, 1);
+
+        vm.record();
+        assertEq(store.slotOfWithHints(forB, a), packedAt);
+        _assertRead(_reads(), _directory());
+
+        // Loaded together, the later hint replaces the earlier. Either way both are found.
+        bytes memory aLast = bytes.concat(forB, forA);
+        bytes memory bLast = bytes.concat(forA, forB);
+
+        assertEq(store.slotOfWithHints(aLast, a), packedAt);
+        assertEq(store.slotOfWithHints(aLast, b), _home(b));
+        assertEq(store.slotOfWithHints(bLast, a), packedAt);
+        assertEq(store.slotOfWithHints(bLast, b), _home(b));
+
+        _assertFilled(a, 10);
+        _assertFilled(b, 20);
+    }
+
+    function test_trailingPartialHintIsIgnored() public {
+        HintStore hints = _hintStore(false);
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _pack(a, 3);
+        _pack(b, 4);
+        uint256 atA = store.slotOf(a);
+        uint256 atB = store.slotOf(b);
+        bytes memory both = bytes.concat(_hint(a, 4), _hint(b, 5));
+
+        // Fewer than 5 bytes load nothing, though a's whole hint follows them in calldata.
+        for (uint256 length; length < 5; ++length) {
+            vm.record();
+            assertEq(hints.slotOfWithHints(both, length, a), atA);
+            _assertRead(_reads(), _directory());
+        }
+
+        // From 5 to 9 bytes, a's hint loads and the part of b's doesn't.
+        for (uint256 length = 5; length < 10; ++length) {
+            vm.record();
+            assertEq(hints.slotOfWithHints(both, length, a), atA);
+            _assertNotRead(_reads(), _directory());
+
+            vm.record();
+            assertEq(hints.slotOfWithHints(both, length, b), atB);
+            _assertRead(_reads(), _directory());
+        }
+
+        vm.record();
+        assertEq(hints.slotOfWithHints(both, 10, b), atB);
+        _assertNotRead(_reads(), _directory());
+    }
+
+    /// Hints that name real fingerprints but carry any hint bits, stray top bits and trailing
+    /// junk never change which entry a lookup returns.
+    function testFuzz_malformedHintsChangeNothing(uint256 seed, bool homeHints, bytes memory junk)
+        public
+    {
+        store = new EntryStore(3, 0, homeHints);
+        bytes32[] memory keys = _uniqueKeys(6);
+
+        // Four packed side by side, so a small wrong index usually holds another entry's tag,
+        // and two at home.
+        PagePack.Placement[] memory placements = new PagePack.Placement[](4);
+        for (uint256 i; i < 4; ++i) {
+            placements[i] = PagePack.Placement(keys[i], i);
+        }
+        store.rebalance(placements);
+
+        uint256[] memory expected = new uint256[](keys.length);
+        bytes memory hints;
+
+        for (uint256 i; i < keys.length; ++i) {
+            expected[i] = store.slotOf(keys[i]);
+
+            uint256 random = _random(seed, i);
+            uint256 hint = (random >> 8) % 6;
+            if (random % 4 == 0) hint = (random >> 8) & 0x7ff;
+            if (random % 4 == 1) hint = PagePack.HOME;
+
+            // Sometimes with bits set above the fingerprint.
+            uint256 top = (random >> 24) % 3 == 0 ? (random >> 32) & 0x7f : 0;
+            uint256 packed = (top << 33) | (_fingerprint(keys[i]) << 11) | hint;
+
+            hints = bytes.concat(hints, bytes5(uint40(packed)));
+        }
+
+        hints = bytes.concat(hints, junk);
+
+        for (uint256 i; i < keys.length; ++i) {
+            assertEq(store.slotOfWithHints(hints, keys[i]), expected[i]);
+        }
+    }
+
+    function test_packedHintsOfJoinsEachKeysHint() public {
+        HintStore hints = _hintStore(false);
+        bytes32[] memory keys = _uniqueKeys(4);
+        _pack(keys[0], 9);
+        _pack(keys[2], 2);
+
+        // Keys 1 and 3 are at home, and this map has no hint for them.
+        bytes memory loaded = hints.packedHintsOf(keys);
+        assertEq(loaded, bytes.concat(_packedHint(keys[0], 10), _packedHint(keys[2], 3)));
+
+        vm.record();
+        assertEq(store.slotOfWithHints(loaded, keys[0]), store.slotOf(keys[0], 10));
+        assertEq(store.slotOfWithHints(loaded, keys[2]), store.slotOf(keys[2], 3));
+        _assertNotRead(_reads(), _directory());
+
+        // No keys, and keys with nothing packed, give no bytes.
+        assertEq(hints.packedHintsOf(new bytes32[](0)).length, 0);
+
+        (keys[0], keys[2]) = (keys[1], keys[3]);
+        assertEq(hints.packedHintsOf(keys).length, 0);
+    }
+
+    function test_packedHintsOfGivesHomeHintsInHomeHintMaps() public {
+        HintStore hints = _hintStore(true);
+        bytes32[] memory keys = _uniqueKeys(4);
+        _pack(keys[0], 9);
+        _pack(keys[2], 2);
+
+        bytes memory loaded = hints.packedHintsOf(keys);
+        assertEq(
+            loaded,
+            bytes.concat(
+                _packedHint(keys[0], 10),
+                _packedHint(keys[1], PagePack.HOME),
+                _packedHint(keys[2], 3),
+                _packedHint(keys[3], PagePack.HOME)
+            )
+        );
+
+        uint256[] memory expected = new uint256[](keys.length);
+        for (uint256 i; i < keys.length; ++i) {
+            expected[i] = store.slotOf(keys[i]);
+        }
+
+        // Every key has a hint, so no lookup needs the directory.
+        vm.record();
+        for (uint256 i; i < keys.length; ++i) {
+            assertEq(store.slotOfWithHints(loaded, keys[i]), expected[i]);
+        }
+        _assertNotRead(_reads(), _directory());
+    }
+
+    function test_hintsOfGivesEveryKeyTwoBytes() public {
+        HintStore hints = _hintStore(false);
+        bytes32[] memory keys = _uniqueKeys(4);
+        _pack(keys[0], 9);
+        _pack(keys[2], 1023);
+
+        // The highest index's hint needs its high byte. Keys 1 and 3 are at home, and this
+        // map has no hint for them, but each still takes its 2 bytes.
+        bytes memory run = hints.hintsOf(keys);
+        assertEq(run, hex"000a000004000000");
+
+        for (uint256 i; i < keys.length; ++i) {
+            assertEq(hints.hintAt(run, i), store.hintOf(keys[i]));
+        }
+
+        // So the hint after a key without one is still read at its own position.
+        uint256 expected = store.slotOf(keys[2]);
+
+        vm.record();
+        assertEq(hints.slotOfAt(keys[2], run, 2), expected);
+        _assertNotRead(_reads(), _directory());
+
+        assertEq(hints.hintsOf(new bytes32[](0)).length, 0);
+    }
+
+    function test_hintsOfGivesHomeHintsInHomeHintMaps() public {
+        HintStore hints = _hintStore(true);
+        bytes32[] memory keys = _uniqueKeys(4);
+        _pack(keys[0], 9);
+        _pack(keys[2], 2);
+
+        bytes memory run = hints.hintsOf(keys);
+        assertEq(run, hex"000a040100030401");
+
+        uint256[] memory expected = new uint256[](keys.length);
+        for (uint256 i; i < keys.length; ++i) {
+            expected[i] = store.slotOf(keys[i]);
+        }
+
+        // Every key has a hint, so no lookup needs the directory.
+        vm.record();
+        for (uint256 i; i < keys.length; ++i) {
+            assertEq(hints.slotOfAt(keys[i], run, i), expected[i]);
+        }
+        _assertNotRead(_reads(), _directory());
+    }
+
+    function test_hintAtReadsTwoByteHints() public {
+        HintStore hints = _hintStore(false);
+        bytes memory run = abi.encodePacked(uint16(1), uint16(PagePack.HOME), uint16(0xabcd));
+
+        assertEq(hints.hintAt(run, 0), 1);
+        assertEq(hints.hintAt(run, 1), PagePack.HOME);
+        assertEq(hints.hintAt(run, 2), 0xabcd);
+
+        // Past the end there is no hint, though more hints follow the run in calldata.
+        assertEq(hints.hintAt(run, 3), 0);
+        assertEq(hints.hintAt(run, 4, 1), PagePack.HOME);
+        assertEq(hints.hintAt(run, 4, 2), 0);
+        assertEq(hints.hintAt(run, 0, 0), 0);
+        assertEq(hints.hintAt("", 0), 0);
+
+        // Half a hint isn't one.
+        assertEq(hints.hintAt(run, 5, 1), PagePack.HOME);
+        assertEq(hints.hintAt(run, 5, 2), 0);
+
+        // Positions so large that twice the position wraps around.
+        assertEq(hints.hintAt(run, 1 << 255), 0);
+        assertEq(hints.hintAt(run, (1 << 255) + 1), 0);
+        assertEq(hints.hintAt(run, type(uint256).max), 0);
+    }
+
+    function test_positionalHintsSkipDirectory() public {
+        HintStore hints = _hintStore(true);
+        (bytes32 a, bytes32 b) = (_key(1), _key(2));
+        _fill(a, 10);
+        _pack(a, 7);
+        uint256 packedAt = store.slotOf(a);
+
+        bytes memory run = abi.encodePacked(uint16(store.hintOf(a)), uint16(store.hintOf(b)));
+        assertEq(run, hex"00080401");
+
+        vm.record();
+        assertEq(hints.slotOfAt(a, run, 0), packedAt);
+        assertEq(hints.slotOfAt(b, run, 1), _home(b));
+        assertEq(_reads().length, 2);
+
+        // A lookup past the hints sent has none, and searches the directory.
+        vm.record();
+        assertEq(hints.slotOfAt(a, run, 2), packedAt);
+        _assertRead(_reads(), _directory());
     }
 
     function test_fingerprintMatchStillChecksIdentity() public {
@@ -928,10 +1294,8 @@ contract PagePackTest is Test {
         // For another key, it is only a wrong hint.
         assertEq(store.slotOf(_key(1, 3), 6), _home(_key(1, 3)));
 
-        // Hints for both kinds load from one list, and the lookup then reads only the tag.
-        PagePack.Hint[] memory hints = new PagePack.Hint[](2);
-        hints[0] = PagePack.Hint(a, 6);
-        hints[1] = PagePack.Hint(b, 7);
+        // Hints for both kinds load from one run, and the lookup then reads only the tag.
+        bytes memory hints = bytes.concat(_hint(a, 6), _hint(b, 7));
 
         vm.record();
         assertEq(store.slotOfWithHints(hints, a), expected);
@@ -1273,9 +1637,35 @@ contract PagePackTest is Test {
         }
     }
 
-    function _hint(bytes32 key, uint256 hint) internal pure returns (PagePack.Hint[] memory hints) {
-        hints = new PagePack.Hint[](1);
-        hints[0] = PagePack.Hint(key, hint);
+    function _assertRead(bytes32[] memory reads, uint256 location) internal pure {
+        bool read;
+
+        for (uint256 i; i < reads.length; ++i) {
+            if (uint256(reads[i]) == location) read = true;
+        }
+
+        assertTrue(read, "didn't read the directory");
+    }
+
+    /// The 5 bytes {PagePack.useHints} takes for `key`: its fingerprint above an 11-bit hint.
+    function _packedHint(bytes32 key, uint256 hint) internal view returns (bytes5) {
+        return bytes5(uint40((_fingerprint(key) << 11) | hint));
+    }
+
+    /// One packed hint, as the bytes to load.
+    function _hint(bytes32 key, uint256 hint) internal view returns (bytes memory) {
+        return abi.encodePacked(_packedHint(key, hint));
+    }
+
+    /// Swaps in a store that also builds hints and reads positional ones.
+    function _hintStore(bool homeHints) internal returns (HintStore hints) {
+        hints = new HintStore(3, homeHints);
+        store = hints;
+    }
+
+    /// The storage slots `store` has read since vm.record().
+    function _reads() internal view returns (bytes32[] memory reads) {
+        (reads,) = vm.accesses(address(store));
     }
 
     function _flag(bytes32 key) internal view returns (uint256) {

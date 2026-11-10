@@ -11,7 +11,8 @@ import {Entry, PagePack, PagedMap} from "pagepack/PagePack.sol";
 //     BALANCES.find(maker).quote += cost;
 //
 // The map's width is the struct's size, so it always fits. Hints and rebalancing go through the
-// underlying map: `BALANCES.map().useHints(hints)`, with keys from `balanceKey`.
+// underlying map, with keys from `balanceKey`: `BALANCES.map().useHints(hints)` loads the hints
+// a caller sends, 5 bytes each, and `BALANCES.map().packedHintsOf(keys)` builds them offchain.
 
 /// One slot. Fixed-size fields only: an entry's location changes when it is packed.
 struct Balance {

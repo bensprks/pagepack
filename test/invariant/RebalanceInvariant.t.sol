@@ -594,18 +594,15 @@ abstract contract RebalanceInvariantTest is Test {
     /// Hints taken before later rebalances still find their entries, passed to a lookup or
     /// loaded with {PagePack.useHints}: a stale hint costs a search, never a wrong entry.
     function invariant_savedHintsFindTheirEntries() public {
-        uint256 count;
-        for (uint256 k; k < handler.KEYS(); ++k) {
-            if (handler.saved(k)) ++count;
-        }
-
-        PagePack.Hint[] memory hints = new PagePack.Hint[](count);
-        count = 0;
+        // Each saved hint as {PagePack.useHints} takes it: 5 bytes, the key's fingerprint above
+        // the hint.
+        bytes memory hints;
 
         for (uint256 k; k < handler.KEYS(); ++k) {
-            if (handler.saved(k)) {
-                hints[count++] = PagePack.Hint(handler.key(k), handler.savedHint(k));
-            }
+            if (!handler.saved(k)) continue;
+
+            uint256 packed = (store.fingerprintOf(handler.key(k)) << 11) | handler.savedHint(k);
+            hints = bytes.concat(hints, bytes5(uint40(packed)));
         }
 
         for (uint256 k; k < handler.KEYS(); ++k) {

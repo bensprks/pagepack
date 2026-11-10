@@ -1,7 +1,7 @@
 # pagepack
 
 A Solidity library for Monad that lets you move storage entries that are used together onto the
-same MIP-8 pages, to reduce gas costs by up to 82%.
+same MIP-8 pages, to reduce gas costs by up to 83%.
 
 **Storage on Monad.** Under [MIP-8](https://github.com/monad-crypto/MIPs/blob/main/MIPs/MIP-8.md),
 Monad groups each contract's storage into pages of 128 consecutive slots. The first slot a
@@ -37,22 +37,26 @@ It pays off when:
 
 ## Results
 
-Updating existing one-slot balances in one transaction, from `make gas` on Monad's gas schedule:
+Updating existing one-slot balances in one transaction, from `make gas` on Monad's gas schedule.
+Each figure is the whole transaction's gas, calldata included. Hinted transactions pass each
+lookup a 2-byte hint, the cheapest of the [hint styles](docs/reference.md#hint-styles):
 
 | Entries updated in one tx | Regular mapping | pagepack, no hint | pagepack, hinted |
 | --- | ---: | ---: | ---: |
-| 1 entry | 33,556 | 43,053 (+28%) | 34,845 (+4%) |
-| 2 entries | 45,321 | 45,372 (+0%) | 36,461 (-20%) |
-| 10 entries | 139,537 | 65,758 (-53%) | 49,497 (-65%) |
-| 30 entries | 375,029 | 118,148 (-68%) | 82,009 (-78%) |
-| 64 entries, a full page | 775,423 | 207,884 (-73%) | 137,337 (-82%) |
-| 2 unpacked entries | 45,309 | 56,532 (+25%) | – |
+| 1 entry | 33,556 | 43,068 (+28%) | 34,773 (+4%) |
+| 2 entries | 45,321 | 45,402 (+0%) | 36,254 (-20%) |
+| 10 entries | 139,537 | 65,908 (-53%) | 48,210 (-65%) |
+| 30 entries | 375,029 | 118,598 (-68%) | 78,150 (-79%) |
+| 64 entries, a full page | 775,423 | 208,844 (-73%) | 129,144 (-83%) |
+| 2 unpacked entries | 45,309 | 56,562 (+25%) | – |
 
 A page holds 64 one-slot entries, not 128, because each packed entry also has a one-slot tag on
 the page. Entries that aren't packed cost more than in a regular mapping, because the lookup
 still searches the directory. In a map created with `mapWithHomeHints`, a `HOME` hint reduces this
-to +4% (see the [full table](docs/reference.md#results)). Costs without a hint also vary by a few
-percent with the keys, which the reference shows over 16 key sets.
+to +3% (see the [full table](docs/reference.md#results)). Costs without a hint also vary by a few
+percent with the keys, which the reference shows over 16 key sets. Loading hints once with
+`useHints`, as the [usage](#usage) example does, is simpler and costs more: 150,386 for the full
+page (-81%).
 
 ## Usage
 
@@ -60,21 +64,17 @@ Example: when a buy order fills several asks, the order book credits each ask's 
 `BalanceMap` is a small module you copy into your project (see [Setup](#setup)).
 
 ```solidity
-import {PagePack} from "pagepack/PagePack.sol";
 import {BalanceMap, balanceMap} from "./BalanceMap.sol";
 
 contract OrderBook {
     BalanceMap internal immutable BALANCES = balanceMap("book.balances");
 
-    modifier withHints(PagePack.Hint[] calldata hints) {
+    modifier withHints(bytes calldata hints) {
         BALANCES.map().useHints(hints);
         _;
     }
 
-    function buy(uint64[] calldata askIds, PagePack.Hint[] calldata hints)
-        external
-        withHints(hints)
-    {
+    function buy(uint64[] calldata askIds, bytes calldata hints) external withHints(hints) {
         for (uint256 i; i < askIds.length; ++i) {
             Order storage ask = orders[askIds[i]];
             BALANCES.find(ask.maker).quote += ask.size * ask.price;
@@ -142,8 +142,11 @@ there is one, otherwise searches the directory (about 1,000 to 1,400 gas once it
 loaded), and falls back to home if the key isn't listed. Hints are verified, so a wrong one costs
 gas but never returns the wrong entry.
 
-**Hints** let a lookup skip the directory. Callers get them offchain from `hintOf(key)` and send
-them with the transaction, and the contract loads them once with `useHints`. Maps made with
+**Hints** let a lookup skip the directory. A caller gets a transaction's hints offchain and
+sends them as `bytes`. The simplest way to use them is to load them once with `useHints`: 5
+bytes for each entry, from `packedHintsOf(keys)`. A function that already loops over its keys
+can pass each lookup its hint instead, with `find(key, hint)`: 2 bytes for each key, from
+`hintsOf(keys)`. That costs the least, and is what the results above measure. Maps made with
 `mapWithHomeHints` also accept `HOME` for entries that aren't packed.
 
 **Rebalancing** takes a list of placements, each an entry's key and its new index, or `HOME` to
@@ -190,6 +193,7 @@ A struct from `find` is a raw storage pointer:
 - A map of several kinds lists up to 8, numbered 0 to 7. Kinds of the same size can share a
   number. Its keys are 31 bytes under the kind.
 - A map's kinds, sizes and entries per page are fixed once it holds data.
+- A hint is 5 bytes of calldata when loaded with `useHints`, or 2 when passed to a lookup.
 
 The [reference](docs/reference.md#limits) has the full table and the margins behind it.
 

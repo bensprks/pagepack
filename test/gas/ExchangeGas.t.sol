@@ -171,7 +171,7 @@ contract ExchangeGasTest is Test {
         Exchange.QuoteUpdate[] memory updates = new Exchange.QuoteUpdate[](1);
         updates[0] = Exchange.QuoteUpdate(0, 0, true, 2_010, 5);
 
-        PagePack.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[0], 8, 6)) : _none();
+        bytes memory hints = hinted ? _hints(_makerKeys(makers[0], 8, 6)) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(makers[0]);
@@ -185,7 +185,7 @@ contract ExchangeGasTest is Test {
             updates[i] = Exchange.QuoteUpdate(i, BOOK, true, 2_005 + i, 4);
         }
 
-        PagePack.Hint[] memory hints = hinted ? _hints(_makerKeys(makers[1], 4, 1)) : _none();
+        bytes memory hints = hinted ? _hints(_makerKeys(makers[1], 4, 1)) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(makers[1]);
@@ -224,7 +224,7 @@ contract ExchangeGasTest is Test {
         keys[count * 3 + 2] = accountKey(taker);
         keys[count * 3 + 3] = positionKey(taker, BOOK);
 
-        PagePack.Hint[] memory hints = hinted ? _hints(keys) : _none();
+        bytes memory hints = hinted ? _hints(keys) : _none();
         _coolIfHinted(exchange, hinted);
 
         vm.prank(operator);
@@ -236,14 +236,11 @@ contract ExchangeGasTest is Test {
     // Hints
     // ------------------------------------------------------------------------------------------
 
-    /// Hints for `keys`, as an offchain caller would build them. Entries that aren't packed get
-    /// PagePack.HOME.
-    function _hints(bytes32[] memory keys) internal view returns (PagePack.Hint[] memory hints) {
-        hints = new PagePack.Hint[](keys.length);
-
-        for (uint256 i; i < keys.length; ++i) {
-            hints[i] = PagePack.Hint(keys[i], packedExchange.hintOf(keys[i]));
-        }
+    /// Hints for `keys`, as an offchain caller would build them: one call, 5 bytes a key.
+    /// Entries that aren't packed get PagePack.HOME.
+    function _hints(bytes32[] memory keys) internal view returns (bytes memory hints) {
+        hints = packedExchange.hintsFor(keys);
+        assertEq(hints.length, 5 * keys.length);
     }
 
     /// Reading hints warmed the exchange's pages; measure as a fresh transaction.
@@ -271,7 +268,7 @@ contract ExchangeGasTest is Test {
         }
     }
 
-    function _none() internal pure returns (PagePack.Hint[] memory) {}
+    function _none() internal pure returns (bytes memory) {}
 
     // ------------------------------------------------------------------------------------------
     // Setup

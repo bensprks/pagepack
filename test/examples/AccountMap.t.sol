@@ -16,7 +16,7 @@ import {
 contract Spender {
     AccountMap internal immutable ACCOUNTS = accountMap("test.accounts");
 
-    function spend(address owner, uint128 amount, PagePack.Hint[] calldata hints) external {
+    function spend(address owner, uint128 amount, bytes calldata hints) external {
         ACCOUNTS.map().useHints(hints);
 
         ACCOUNTS.approval(owner, msg.sender).amount -= amount;
@@ -34,6 +34,10 @@ contract Spender {
 
     function hintOf(bytes32 key) external view returns (uint256) {
         return ACCOUNTS.map().hintOf(key);
+    }
+
+    function hintsFor(bytes32[] calldata keys) external view returns (bytes memory) {
+        return ACCOUNTS.map().packedHintsOf(keys);
     }
 
     function slotOf(bytes32 key) external view returns (uint256) {
@@ -93,7 +97,7 @@ contract AccountMapTest is Test {
         }
     }
 
-    /// One list of hints covers both kinds.
+    /// One run of hints covers both kinds.
     function test_oneHintListServesBothKinds() public {
         address owner = makeAddr("owner");
         address other = makeAddr("other");
@@ -106,14 +110,16 @@ contract AccountMapTest is Test {
         placements[1] = PagePack.Placement(approvalKey(owner, other), 1);
         spender.pack(placements);
 
-        // Both kinds' hints are plain indices.
-        PagePack.Hint[] memory hints = new PagePack.Hint[](2);
-        hints[0] = PagePack.Hint(accountKey(owner), spender.hintOf(accountKey(owner)));
-        hints[1] =
-            PagePack.Hint(approvalKey(owner, other), spender.hintOf(approvalKey(owner, other)));
+        // Both kinds' hints are plain indices, and one call builds the bytes to send.
+        bytes32[] memory keys = new bytes32[](2);
+        keys[0] = accountKey(owner);
+        keys[1] = approvalKey(owner, other);
 
-        assertEq(hints[0].hint, 1);
-        assertEq(hints[1].hint, 2);
+        assertEq(spender.hintOf(keys[0]), 1);
+        assertEq(spender.hintOf(keys[1]), 2);
+
+        bytes memory hints = spender.hintsFor(keys);
+        assertEq(hints.length, 10);
 
         vm.record();
         vm.prank(other);
