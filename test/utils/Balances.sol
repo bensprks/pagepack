@@ -38,8 +38,13 @@ contract PackedBalances {
         return BALANCES.hintOf(key);
     }
 
+    /// The hints {bumpPositional} takes for `keys`: 2 bytes for each key, in order.
+    function hintsOf(bytes32[] calldata keys) external view returns (bytes memory) {
+        return BALANCES.hintsOf(keys);
+    }
+
     /// The hints {bumpLoaded} takes for `keys`: 5 bytes for each key that has one.
-    function hintsFor(bytes32[] calldata keys) external view returns (bytes memory) {
+    function packedHintsOf(bytes32[] calldata keys) external view returns (bytes memory) {
         return BALANCES.packedHintsOf(keys);
     }
 

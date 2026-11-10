@@ -8,8 +8,8 @@ import {PackedBalances} from "../utils/Balances.sol";
 /// Measures updating packed one-slot balances, as PagePackGas does, over 16 key sets, and records
 /// the mean, lowest and highest. A lookup without a hint searches the directory, and how many
 /// words the search reads depends on the packed entries' fingerprints, so one key set can be
-/// several percent off the mean. Hinted lookups, with 5-byte hints loaded by useHints, skip the
-/// search and barely vary.
+/// several percent off the mean. Hinted lookups, each passed a 2-byte hint as in PagePackGas,
+/// skip the search and barely vary.
 ///
 /// Each set packs 494 entries, as PagePackGas does: the measured ones fill page 0, and the rest
 /// give the directory the same depth.
@@ -71,7 +71,7 @@ contract KeySetsGasTest is Test {
         for (uint256 s; s < SETS; ++s) {
             PackedBalances store = stores[s];
             bytes32[] memory keys = _keys(salts[s], count);
-            bytes memory hints = store.hintsFor(keys);
+            bytes memory hints = store.hintsOf(keys);
 
             vm.cool(address(store));
             store.bump(keys);
@@ -82,7 +82,7 @@ contract KeySetsGasTest is Test {
             if (used > highest) highest = used;
 
             vm.cool(address(store));
-            store.bumpLoaded(keys, hints);
+            store.bumpPositional(keys, hints);
             hintedTotal += vm.lastCallGas().gasTotalUsed;
 
             assertEq(store.balanceOf(keys[0]), 1_002);
